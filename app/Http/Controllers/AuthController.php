@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Mail\OTPVerify;
 use App\Mail\ForgotPassword;
 use App\Models\User;
+use Google_Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -13,19 +14,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 
-use function Laravel\Prompts\table;
-
 class AuthController extends Controller
 {
 
     public function login(Request $request)
     {
-
-        Cookie::queue(Cookie::forget('token'));
+        Cookie::queue(Cookie::forget(name: 'token'));
         if (Auth::attempt(["email" => $request->input("email"), "password" => $request->input("password")], $request->input("remember"))) {
-
             auth()->user()->tokens()->delete();
-
             $token = $request->user()->createToken("token")->plainTextToken;
             $cookie = cookie('token', $token, 14400, '/',);
             $response = response()->json([
@@ -35,8 +31,6 @@ class AuthController extends Controller
             $response->withCookie($cookie);
             return $response;
         }
-
-
         return response()->json(
             [
                 'message' => "Tên tài khoản hoặc mật khẩu không chính xác"
@@ -44,19 +38,55 @@ class AuthController extends Controller
             401
         );
     }
+    public function googleLogin(Request $request)
+    {
+        $client = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);
+
+        $payload = $client->verifyIdToken($request->id_token);
+
+        if (!$payload) {
+            return response()->json(['message' => 'Token không hợp lệ'], 401);
+        }
+
+        $email = $payload['email'];
+        $name  = $payload['name'];
+        $googleId = $payload['sub'];
+
+        $user = User::where('email', $email)->first();
+
+        if (!$user) {
+            $user = User::create([
+                "name" => $name,
+                "email" => $email,
+                "role" => "person",
+                'email_verified_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
+        }
+        $user->tokens()->delete();
+
+        $token = $user->createToken('token')->plainTextToken;
+        $cookie = cookie('token', $token, 14400, '/',);
+        $response = response()->json([
+            'user' => $request->user(),
+            'token' => $token
+        ]);
+        $response->withCookie($cookie);
+        return $response;
+    }
     public function verifyRegister(Request $request)
     {
         $data = $request->input();
         $email = $data['email'];
-        $account = DB::table("users")->where("email", $email)->get();
-        if ($account->count()) {
+        $user = User::where('email', $email)->first();
+        if ($user && $user->password) {
             return response()->json('Email này đã được đăng ký rồi !', 409);
         } else {
             $otp = $this->generateOTP();
             Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
-            Mail::to($data['email'])->send(new OTPVerify($otp));
-
-            return response()->json("");
+            Mail::to($email)->send(new OTPVerify($otp));
+            return response()->json("Đã gửi email tới " . $email . ". Vui lòng kiểm tra email!");
         }
     }
     public function register(Request $request)
@@ -64,20 +94,29 @@ class AuthController extends Controller
         $data = $request->input();
         $email = $data['email'];
         $otp = $data['otp'];
+
         $dataOTP = $this->verifyOTP($email, $otp);
         if ($dataOTP === true) {
-            DB::table("users")->insert(
-                array(
-                    "name" => $data["name"],
-                    "email" => $data["email"],
-                    "password" => bcrypt($data["password"]),
-                    "avatar" => "https://th.bing.com/th/id/OIP.xyVi_Y3F3YwEIKzQm_j_jQHaHa?rs=1&pid=ImgDetMain",
+            $password = bcrypt($data["password"]);
+            $name = $data["name"];
+            $user = User::where('email', $email)->first();
+            if ($user) {
+                $user->update([
+                    "password" => $password,
+                    'email_verified_at' => now(),
+                    'updated_at' => now()
+                ]);
+            } else {
+                $user = User::create([
+                    "name" => $name,
+                    "email" => $email,
+                    "password" => $password,
                     "role" => "person",
                     'email_verified_at' => now(),
                     'created_at' => now(),
                     'updated_at' => now()
-                )
-            );
+                ]);
+            }
             return response()->json('Tạo tài khoản thành công !');
         }
         return $dataOTP;
@@ -166,46 +205,6 @@ class AuthController extends Controller
         }
         return $otp;
     }
-    public function getProfile(Request $request)
-    {
-        $id = $request->input('id');
-        $email = $request->input('email');
-        if (!$id && $email == 'this') {
-            $id = auth()->user()->id;
-            $email = auth()->user()->email;
-        }
-        $user = DB::table('users')
-            ->where([['id', $id], ['email', 'like', '%' . $email  . '%']])
-            ->first(['name', 'avatar', 'banner', 'id', 'role']);
-
-        $examples  = DB::table('examples')
-            ->join('users', 'examples.user_id', '=', 'users.id')->leftJoin('user_actions', function ($join) {
-                $join->on('examples.id', '=', 'user_actions.example_id')
-                    ->where('user_actions.user_id', '=', auth('sanctum')->user()->id);
-            })->select(
-                'examples.*',
-                'user_actions.like',
-                'user_actions.favorited',
-                'users.name as username',
-                'users.avatar',
-                'users.email',
-                'users.role'
-            )
-            ->where('users.id', '=', $id)
-            ->limit(4)->get();
-        $user->examples = $examples;
-        if ($user) {
-            return response()->json($user);
-        } else {
-            return response()->json('Không có người dùng này', 404);
-        }
-    }
-    public function updateProfile(Request $request)
-    {
-        $data = $request->input();
-        $user = DB::table('users')->where('id', auth()->user()->id)->update($data);
-        return response()->json($user);
-    }
     public function auth(Request $request)
     {
         return response()->json($request->user());
@@ -216,20 +215,5 @@ class AuthController extends Controller
         auth()->user()->tokens()->delete();
 
         return response()->json("Thanh cong")->withoutCookie(Cookie::forget('token'));
-    }
-
-    public function getUsers(Request $request)
-    {
-        // Lấy danh sách ID từ request
-        $ids = $request->input('ids');
-
-        if (!is_array($ids) || empty($ids)) {
-            return response()->json(['message' => 'Invalid request'], 400);
-        }
-
-
-        $users = User::whereIn('id', $ids)->select('id', 'name', 'avatar')->get();
-
-        return response()->json($users);
     }
 }

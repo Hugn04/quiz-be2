@@ -3,16 +3,19 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExampleController;
 use App\Http\Controllers\ScoreController;
+use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth', [AuthController::class, 'auth']);
     Route::get('/logout', [AuthController::class, 'logout']);
-    Route::get('/get-profile', [AuthController::class, 'getProfile']);
-    Route::post('/update-profile', [AuthController::class, 'updateProfile']);
     Route::post('/change-password', [AuthController::class, 'changePassword']);
-    Route::post('/get-users', [AuthController::class, 'getUsers']);
+
+
+    Route::get('/get-profile', [UserController::class, 'getProfile']);
+    Route::post('/update-profile', [UserController::class, 'updateProfile']);
+    Route::post('/get-users', [UserController::class, 'getUsers']);
 
 
     Route::post('/create-example', [ExampleController::class, 'createExample']);
@@ -30,6 +33,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/update-score', [ScoreController::class, 'updateScore']);
     Route::get('/get-score', [ScoreController::class, 'getScores']);
 });
+Route::post('/auth/google', [AuthController::class, 'googleLogin']);
 Route::get('/get-example', [ExampleController::class, 'getAllExample']);
 Route::post('/login', [AuthController::class, 'login']);
 

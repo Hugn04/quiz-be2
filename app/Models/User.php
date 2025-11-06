@@ -20,7 +20,10 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'role',
         'password',
+        'email_verified_at',
+        'banner'
     ];
 
     /**
@@ -44,5 +47,16 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+    public function examples()
+    {
+        return $this->hasManyThrough(
+            Example::class,      // Model muốn lấy
+            UserAction::class,   // Model trung gian
+            'user_id',           // FK của UserAction → User
+            'id',                // PK của Example
+            'id',                // PK của User
+            'example_id'         // FK của UserAction → Example
+        );
     }
 }
