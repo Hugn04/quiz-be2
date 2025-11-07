@@ -34,6 +34,9 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'email_verified_at',
+        'updated_at',
+        'created_at'
     ];
 
     /**
@@ -50,13 +53,6 @@ class User extends Authenticatable
     }
     public function examples()
     {
-        return $this->hasManyThrough(
-            Example::class,      // Model muốn lấy
-            UserAction::class,   // Model trung gian
-            'user_id',           // FK của UserAction → User
-            'id',                // PK của Example
-            'id',                // PK của User
-            'example_id'         // FK của UserAction → Example
-        );
+        return $this->hasMany(Example::class, 'user_id');
     }
 }

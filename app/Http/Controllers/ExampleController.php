@@ -91,62 +91,23 @@ class ExampleController extends Controller
         $query = [];
         if ($search) array_push($query, ['examples.name', 'like', '%' . $search  . '%']);
         if ($id) array_push($query, ['examples.id', $id]);
+        $result = Example::where($query)->with(["userAction", "user"])
+            ->orderBy(
+                'examples.count_test',
+                'desc'
+            )->paginate($perPage);
 
-        $example  = DB::table('examples')
-            ->join('users', 'examples.user_id', '=', 'users.id');
-
-        if (auth('sanctum')->check()) {
-            $example->leftJoin('user_actions', function ($join) {
-                $join->on('examples.id', '=', 'user_actions.example_id')
-                    ->where('user_actions.user_id', '=', auth('sanctum')->user()->id);
-            })->select(
-                'examples.*',
-                'user_actions.like',
-                'user_actions.favorited',
-                'users.name as username',
-                'users.avatar',
-                'users.email',
-                'users.role'
-            );
-        } else {
-            $example->select(
-                'examples.*',
-                'users.name as username',
-                'users.avatar',
-                'users.email'
-            )
-                ->selectRaw('null as favorited')
-                ->selectRaw('null as "like"');
-        };
-        $result = $example->where($query)
-            ->orderBy('examples.count_test', 'desc')
-            ->paginate($perPage);
         return response()->json($result);
     }
     public function getQuestion(Request $request)
     {
-
         $id = $request->input('id');
-        DB::table('examples')->where('id', $id)->increment('count_test');
-        $question = DB::table('examples')
-            ->where('examples.id', $id)
-            ->join('users', 'examples.user_id', '=', 'users.id')
-            ->leftJoin('user_actions', function ($join) {
-                $join->on('examples.id', '=', 'user_actions.example_id')
-                    ->where('user_actions.user_id', '=', auth('sanctum')->user()->id);
-            })
-            ->join('questions', 'examples.question_id', '=', 'questions.id')
-            ->select(
-                'examples.*',
-                'users.name as username',
-                'user_actions.favorited',
-                'user_actions.like',
-                'users.avatar',
-                'users.role',
-                'questions.question'
-            )
-            ->get()[0];
-        return response()->json($question);
+        $result = Example::where('id', $id)->with(["userAction", "user", "question"])->first();
+        $data = $result->toArray();
+        if (isset($data['question']['question'])) {
+            $data['question'] = $data['question']['question'];
+        }
+        return response()->json($data);
     }
     private function isMyExample($id)
     {
@@ -176,8 +137,8 @@ class ExampleController extends Controller
         $perPage = $request->query('per_page', 9);
         $query = $request->input('query');
         $id = auth()->user()->id;
-        $examples = DB::table('examples')
-            ->where([['user_id', $id], ['examples.name', 'like', '%' . $query  . '%']])
+        $examples = Example::where([['user_id', $id], ['examples.name', 'like', '%' . $query  . '%']])
+            ->with("user", "userAction")
             ->select('*')
             ->paginate($perPage);
         return response()->json($examples);

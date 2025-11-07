@@ -28,7 +28,14 @@ class Example extends Model
     public function userAction()
     {
         return $this->hasOne(UserAction::class)
-            ->where('user_id', auth('sanctum')->id())
-            ->select('like', 'favorited',);
+            ->where('user_id', auth('sanctum')->id());
+    }
+    public  function question()
+    {
+        return $this->belongsTo(Question::class);
+    }
+    public function getQuestionOnlyAttribute()
+    {
+        return $this->question->question ?? null;
     }
 }

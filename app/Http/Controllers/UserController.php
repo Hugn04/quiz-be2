@@ -25,39 +25,13 @@ class UserController extends Controller
             $id = auth()->user()->id;
             $email = auth()->user()->email;
         }
-        // $user = User::where([['id', $id], ['email', 'like', '%' . $email  . '%']])
-        //     ->first(['name', 'avatar', 'banner', 'id', 'role']);
-
-        // $examples  = DB::table('examples')
-        //     ->join('users', 'examples.user_id', '=', 'users.id')->leftJoin('user_actions', function ($join) {
-        //         $join->on('examples.id', '=', 'user_actions.example_id')
-        //             ->where('user_actions.user_id', '=', auth('sanctum')->user()->id);
-        //     })->select(
-        //         'examples.*',
-        //         'user_actions.like',
-        //         'user_actions.favorited',
-        //         'users.name as username',
-        //         'users.avatar',
-        //         'users.email',
-        //         'users.role'
-        //     )
-        //     ->where('users.id', '=', $id)
-        //     ->limit(4)->get();
-        // $user = $user->examples()
-        // $user = User::with(['examples.userAction'])
-        //     ->where('id', $id)
-        //     ->first();
-        // $ex = Example::query()
-        //     ->with('user')
-        //     ->leftJoin('user_actions', function ($join) {
-        //         $join->on('examples.id', '=', 'user_actions.example_id')
-        //             ->where('user_actions.user_id', auth('sanctum')->id());
-        //     })
-        //     ->select('examples.*', 'user_actions.*') // hoặc custom field cụ thể
-        //     ->get();
-        $user = Example::with(['user', 'userAction'])
-            ->limit(4)
-            ->get();
+        $user = User::where([['id', $id], ['email', 'like', '%' . $email  . '%']])->first();
+        $user = $user->load([
+            'examples' => function ($q) {
+                $q->limit(4); // hoặc ->take(4)
+            },
+            'examples.userAction'
+        ]);
         if ($user) {
             return response()->json($user);
         } else {
@@ -69,10 +43,6 @@ class UserController extends Controller
         $data = $request->input();
         $user = DB::table('users')->where('id', auth()->user()->id)->update($data);
         return response()->json($user);
-    }
-    public function auth(Request $request)
-    {
-        return response()->json($request->user());
     }
 
     public function getUsers(Request $request)

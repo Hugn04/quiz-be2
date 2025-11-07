@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Example;
 use App\Models\Score;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -14,36 +15,29 @@ class ScoreController extends Controller
 
         // Kiểm tra và giải mã dữ liệu
         $data = json_decode($rawData, true);
-
-        // Nếu dữ liệu là JSON hợp lệ
-        if (json_last_error() === JSON_ERROR_NONE) {
-            // Dữ liệu đã được giải mã thành công, tiếp tục với dữ liệu này
-        } else {
-            // Nếu không phải là JSON hợp lệ, kiểm tra xem dữ liệu có phải là chuỗi JSON đã stringify không
-            $data = json_decode(json_encode($rawData), true); // Giải mã lại chuỗi JSON
-
-            // Kiểm tra lại lần nữa nếu dữ liệu có hợp lệ không
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                // Nếu không phải là JSON hợp lệ cả hai lần, trả về lỗi
-                return response()->json([
-                    'message' => 'Invalid JSON received',
-                    'raw_data' => $rawData
-                ], 400); // Mã lỗi 400 cho trường hợp lỗi
-            }
+        if (json_last_error() !== JSON_ERROR_NONE || $data === null) {
+            $data = $request->all();
         }
+
+        if (empty($data)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No valid input data provided'
+            ], 400);
+        }
+        $example_id = $data['example_id'];
+        Example::where('id', $example_id)->first()->increment('count_test');
         $existingScore = Score::where('user_id', auth()->user()->id)
             ->where('example_id', $data['example_id'])
             ->first();
-
         if ($existingScore) {
+            $score = $data['score'];
             // Nếu điểm mới cao hơn, cập nhật
-            if ($data['score'] > $existingScore->score) {
-                $existingScore->update(['score' => $data['score']]);
+            if ($score > $existingScore->score) {
+                $existingScore->update(['score' => $score]);
             }
             return response()->json($existingScore, 200);
         }
-
-        // Nếu chưa có, tạo mới
         $newScore = Score::create(array_merge(
             $data,
             ['user_id' => auth()->user()->id]
@@ -58,7 +52,9 @@ class ScoreController extends Controller
         $request->validate([
             'example_id' => 'required|exists:examples,id',
         ]);
-
+        // return response()->json([
+        //     'scores'     => $scores,
+        // ], 200);
         // Lấy ra 10 điểm gần nhất của example (có thể sắp xếp theo thời gian hoặc theo điểm tùy theo yêu cầu)
         $scores = Score::with('user:id,name,avatar,email,role')
             ->where('example_id', $request->example_id)
@@ -67,7 +63,7 @@ class ScoreController extends Controller
             ->get();
 
         // Lấy ra điểm của user với example đó
-        $userScore = Score::with('user:id,name,avatar,role')
+        $userScore = Score::with('user')
             ->where('example_id', $request->example_id)
             ->where('user_id', auth()->user()->id)
             ->first();
