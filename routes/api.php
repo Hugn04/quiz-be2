@@ -4,7 +4,6 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExampleController;
 use App\Http\Controllers\ScoreController;
 use App\Http\Controllers\UserController;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -32,9 +31,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/update-score', [ScoreController::class, 'updateScore']);
     Route::get('/get-score', [ScoreController::class, 'getScores']);
+    // Route::middleware('checkRole:person,admin')->group(function () {});
 });
-Route::post('/auth/google', [AuthController::class, 'googleLogin']);
+
 Route::get('/get-example', [ExampleController::class, 'getAllExample']);
+
+Route::post('/auth/google', [AuthController::class, 'googleLogin']);
+
 Route::post('/login', [AuthController::class, 'login']);
 
 Route::post('/verify_register', [AuthController::class, 'verifyRegister']);

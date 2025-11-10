@@ -1,6 +1,7 @@
 <?php
 
-use App\Http\Middleware\Cors;
+use App\Http\Middleware\CheckRole;
+use App\Http\Middleware\CheckToken;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -14,7 +15,10 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         //$middleware->statefulApi();
-        $middleware->append(Cors::class);
+        $middleware->append(middleware: CheckToken::class);
+        $middleware->alias([
+            'checkRole' => CheckRole::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

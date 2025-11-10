@@ -85,17 +85,14 @@ class ExampleController extends Controller
     }
     public function getAllExample(Request $request)
     {
-        $id = $request->query('id', '');
+
+
         $search = $request->query('search', '');
         $perPage = $request->query('per_page', 9);
         $query = [];
         if ($search) array_push($query, ['examples.name', 'like', '%' . $search  . '%']);
-        if ($id) array_push($query, ['examples.id', $id]);
-        $result = Example::where($query)->with(["userAction", "user"])
-            ->orderBy(
-                'examples.count_test',
-                'desc'
-            )->paginate($perPage);
+        $result = Example::filter($request->all())->withUser()->withUserAction()
+            ->paginate($perPage);
 
         return response()->json($result);
     }

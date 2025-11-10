@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 class Example extends Model
 {
@@ -28,14 +29,42 @@ class Example extends Model
     public function userAction()
     {
         return $this->hasOne(UserAction::class)
-            ->where('user_id', auth('sanctum')->id());
+            ->withDefault([
+                'like' => false,
+                'favorited' => false,
+                'user_id' => null,
+                'example_id' => $this->id, // nếu muốn
+            ]);
+    }
+    public function scopeWithUserAction($query)
+    {
+        $id = auth('sanctum')->id();
+        return $query->with(['userAction' => function ($q) use ($id) {
+            $q->where('user_id', $id);
+        }]);
+    }
+    public function scopeWithUser($query)
+    {
+        return $query->with(['user']);
     }
     public  function question()
     {
         return $this->belongsTo(Question::class);
     }
-    public function getQuestionOnlyAttribute()
+    public function scopeFilter($query, $filters)
     {
-        return $this->question->question ?? null;
+        return $query
+            ->when($filters['search'] ?? null, function ($q, $search) {
+                $q->where('name', 'like', "%$search%");
+            })
+            ->when($filters['orderby'] ?? null, function ($q, $orderby) {
+                $q->orderBy(
+                    'examples.count_test',
+                    $orderby
+                );
+            });
+        // ->when($filters['type'] ?? null, function ($q, $type) {
+        //     $q->where('type', $type);
+        // });
     }
 }
