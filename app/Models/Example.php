@@ -13,14 +13,19 @@ class Example extends Model
         'name',
         'count_test',
         'count_like',
-        'university',
-        'degree',
+        'num_question',
+        'sector_id',
+        'image',
         'created_at',
     ];
     public function user()
     {
         return $this->belongsTo(User::class, 'user_id')
             ->select(["id", "name", "email", "avatar", "role"]);
+    }
+    public function sector()
+    {
+        return $this->belongsTo(Sector::class, 'sector_id');
     }
     public function userActions()
     {
@@ -46,6 +51,17 @@ class Example extends Model
     public function scopeWithUser($query)
     {
         return $query->with(['user']);
+    }
+    public function scopeWithAll($query)
+    {
+        $id = auth('sanctum')->id();
+        return $query->with(['user', 'sector'])->with(['userAction' => function ($q) use ($id) {
+            $q->where('user_id', $id);
+        }]);;
+    }
+    public function scopeWithSector($query)
+    {
+        return $query->with(['sector']);
     }
     public  function question()
     {

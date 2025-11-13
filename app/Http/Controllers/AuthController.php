@@ -13,12 +13,15 @@ use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Log;
+
 
 class AuthController extends Controller
 {
 
     public function login(Request $request)
     {
+
         Cookie::queue(Cookie::forget(name: 'token'));
         if (Auth::attempt(["email" => $request->input("email"), "password" => $request->input("password")], $request->input("remember"))) {
             auth()->user()->tokens()->delete();
@@ -43,6 +46,7 @@ class AuthController extends Controller
         $client = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);
 
         $payload = $client->verifyIdToken($request->id_token);
+        Log::debug($payload);
 
         if (!$payload) {
             return response()->json(['message' => 'Token không hợp lệ'], 401);

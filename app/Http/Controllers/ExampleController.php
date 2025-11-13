@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class ExampleController extends Controller
 {
@@ -25,7 +26,7 @@ class ExampleController extends Controller
             'count_like' => 0,
             'num_question' => $data['count_question'],
             'credits' => $data['credits'],
-            'sector' => $data['sector'],
+            'sector_id' => $data['sector'],
             'question_id' => $questionId,
             'user_id' => auth()->user()->id,
             'created_at' => now(),
@@ -44,24 +45,26 @@ class ExampleController extends Controller
         $sector = $request->input("sector");
         $credits = $request->input("credits");
         $image = $request->input("image");
+        Log::debug($image);
         $name = $request->input("name");
-        $question = $request->input("question");
+        $question = $request->input('question');
         $count_question = $request->input("count_question");
 
-        $example = DB::table('examples')
-            ->where('examples.id', $id)
-            ->join('users', 'examples.user_id', '=', 'users.id')
-            ->join('questions', 'examples.question_id', '=', 'questions.id')
-            ->select('examples.*', 'users.name as username', 'users.avatar', 'questions.question');
+        $example = Example::with(['user', 'question'])->findOrFail($id);
+
         $example->update([
-            "examples.num_question" => $count_question,
-            "examples.name" => $name,
-            "examples.credits" => $credits,
-            "examples.image" => $image,
-            "examples.sector" => $sector,
-            "questions.question" => $question,
+            'num_question' => $count_question,
+            'name' => $name,
+            'credits' => $credits,
+            'image' => $image,
+            'sector_id' => $sector,
         ]);
-        return response()->json($question);
+        if ($example->question) {
+            $example->question->update([
+                'question' => $question,
+            ]);
+        }
+        return response()->json($example);
     }
     public function deleteExapmle(Request $request)
     {
@@ -85,13 +88,8 @@ class ExampleController extends Controller
     }
     public function getAllExample(Request $request)
     {
-
-
-        $search = $request->query('search', '');
         $perPage = $request->query('per_page', 9);
-        $query = [];
-        if ($search) array_push($query, ['examples.name', 'like', '%' . $search  . '%']);
-        $result = Example::filter($request->all())->withUser()->withUserAction()
+        $result = Example::filter($request->all())->withAll()
             ->paginate($perPage);
 
         return response()->json($result);
@@ -108,7 +106,7 @@ class ExampleController extends Controller
     }
     private function isMyExample($id)
     {
-        $userId = DB::table("examples")->where('id', $id)->get('user_id')[0]->user_id;
+        $userId = Example::where('id', $id)->first('user_id')->user_id;
         if (auth()->user()->id != $userId) {
             return false;
         }
@@ -116,27 +114,22 @@ class ExampleController extends Controller
     }
     public function getMyQuestion(Request $request)
     {
-        $id = $request->input('id');
-        if (!$this->isMyExample($id)) {
+        $idExample = $request->input('id');
+        if (!$this->isMyExample($idExample)) {
             return response()->json("Bạn không có quyên vào đề này", 403);
         }
-
-        $question = DB::table('examples')
-            ->where('examples.id', $id)
-            ->join('users', 'examples.user_id', '=', 'users.id')
-            ->join('questions', 'examples.question_id', '=', 'questions.id')
-            ->select('examples.*', 'users.name as username', 'users.avatar', 'questions.question')
-            ->get()[0];
+        $question = Example::where("id", $idExample)->withAll()->with('question')->first();
+        $question = $question->toArray();
+        if (isset($question['question']['question'])) {
+            $question['question'] = $question['question']['question'];
+        }
         return response()->json($question);
     }
     public function getMyExample(Request $request)
     {
         $perPage = $request->query('per_page', 9);
-        $query = $request->input('query');
         $id = auth()->user()->id;
-        $examples = Example::where([['user_id', $id], ['examples.name', 'like', '%' . $query  . '%']])
-            ->with("user", "userAction")
-            ->select('*')
+        $examples = Example::where("user_id", $id)->filter($request->all())->withAll()
             ->paginate($perPage);
         return response()->json($examples);
     }

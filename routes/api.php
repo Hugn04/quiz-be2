@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExampleController;
 use App\Http\Controllers\ScoreController;
+use App\Http\Controllers\SectorController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -31,6 +32,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/update-score', [ScoreController::class, 'updateScore']);
     Route::get('/get-score', [ScoreController::class, 'getScores']);
+
+    Route::get('/sectors', [SectorController::class, 'getAllSector']);
+
     // Route::middleware('checkRole:person,admin')->group(function () {});
 });
 

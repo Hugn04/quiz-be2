@@ -18,7 +18,7 @@ class ExampleSeeder extends Seeder
             'count_test' => 0,
             'count_like' => 0,
             'num_question' => 100,
-            'sector' => 'Công nghệ thông tin',
+            'sector_id' => 1,
             'credits' => 2,
             'user_id' => 1,
             'question_id' => 1,
