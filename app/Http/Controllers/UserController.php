@@ -30,7 +30,9 @@ class UserController extends Controller
             'examples' => function ($q) {
                 $q->limit(4); // hoặc ->take(4)
             },
-            'examples.userAction'
+            'examples.userAction',
+            'examples.user',
+            'examples.sector',
         ]);
         if ($user) {
             return response()->json($user);

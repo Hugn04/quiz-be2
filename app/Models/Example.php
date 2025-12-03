@@ -41,6 +41,20 @@ class Example extends Model
                 'example_id' => $this->id, // nếu muốn
             ]);
     }
+    public function scopeMyFavorite($query, $search = null)
+    {
+        $id = auth('sanctum')->id();
+        return $query
+            ->withAll()
+            ->whereHas('userActions', function ($q) use ($id) {
+                $q->where('user_id', $id)
+                    ->where('favorited', true);
+            })
+            ->when($search, function ($q) use ($search) {
+                $q->where('name', 'like', "%$search%");
+            });
+    }
+
     public function scopeWithUserAction($query)
     {
         $id = auth('sanctum')->id();
@@ -57,13 +71,13 @@ class Example extends Model
         $id = auth('sanctum')->id();
         return $query->with(['user', 'sector'])->with(['userAction' => function ($q) use ($id) {
             $q->where('user_id', $id);
-        }]);;
+        }]);
     }
     public function scopeWithSector($query)
     {
         return $query->with(['sector']);
     }
-    public  function question()
+    public function question()
     {
         return $this->belongsTo(Question::class);
     }

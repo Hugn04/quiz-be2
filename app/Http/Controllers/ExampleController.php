@@ -136,21 +136,9 @@ class ExampleController extends Controller
     public function getMyFavorite(Request $request)
     {
         $perPage = $request->query('per_page', 9);
-        $query = $request->input('query');
-        $id = auth()->user()->id;
-
-
-        $examples = DB::table('user_actions')
-            ->join('examples', 'examples.id', '=', 'user_actions.example_id')
-            ->join('users', 'users.id', '=', 'examples.user_id')
-            ->select('examples.*', 'users.email', 'users.avatar', 'users.role', 'user_actions.like', 'user_actions.favorited', 'users.name as username')
-            ->where([['user_actions.favorited', '=', true], ['examples.name', 'like', '%' . $query  . '%'], ['user_actions.user_id', $id]])
-            ->paginate(9);
+        $examples = Example::filter($request->all())->myFavorite()->paginate($perPage);
         return response()->json($examples);
     }
-
-
-
     public function uploadImage(Request $request)
     {
         $id = $request->input('id');
