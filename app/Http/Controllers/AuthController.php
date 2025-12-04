@@ -46,7 +46,6 @@ class AuthController extends Controller
         $client = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);
 
         $payload = $client->verifyIdToken($request->id_token);
-        Log::debug($payload);
 
         if (!$payload) {
             return response()->json(['message' => 'Token không hợp lệ'], 401);
@@ -163,6 +162,9 @@ class AuthController extends Controller
         $newPassword = $request->input('newPassword');
         if (strlen($newPassword) >= 6 && $oldPassword) {
             $user = User::find(auth()->user()->id);
+            if ($user->password === null) {
+                return response()->json('Bạn chưa đăng ký tài khoản này !', 401);
+            }
             if (Hash::check($oldPassword, $user->password)) {
                 $user->update([
                     'password' => Hash::make($newPassword)

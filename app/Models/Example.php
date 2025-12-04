@@ -87,9 +87,18 @@ class Example extends Model
             ->when($filters['search'] ?? null, function ($q, $search) {
                 $q->where('name', 'like', "%$search%");
             })
-            ->when($filters['orderby'] ?? null, function ($q, $orderby) {
+            ->when(!empty($filters['sector']), function ($q) use ($filters) {
+                $q->where('sector_id', $filters['sector']);
+            })
+            ->when($filters['test'] ?? null, function ($q, $orderby) {
                 $q->orderBy(
                     'examples.count_test',
+                    $orderby
+                );
+            })
+            ->when($filters['date'] ?? null, function ($q, $orderby) {
+                $q->orderBy(
+                    'examples.updated_at',
                     $orderby
                 );
             });
