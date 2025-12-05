@@ -91,16 +91,17 @@ class Example extends Model
                 $q->where('sector_id', $filters['sector']);
             })
             ->when($filters['test'] ?? null, function ($q, $orderby) {
+
                 $q->orderBy(
                     'examples.count_test',
                     $orderby
                 );
             })
-            ->when($filters['date'] ?? null, function ($q, $orderby) {
-                $q->orderBy(
-                    'examples.updated_at',
-                    $orderby
-                );
+            ->when($filters['orderBy'] ?? null, function ($q, $orderby) use ($filters) {
+
+                // if (!empty($filters['sort'])) {
+                $q->orderBy("examples.$orderby", $filters['sort'] ?? 'desc');
+                // }
             });
         // ->when($filters['type'] ?? null, function ($q, $type) {
         //     $q->where('type', $type);
