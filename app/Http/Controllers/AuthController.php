@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Mail\OTPVerify;
 use App\Mail\ForgotPassword;
 use App\Models\User;
-use Google_Client;
+use Google\Auth\AccessToken;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -43,41 +43,47 @@ class AuthController extends Controller
     }
     public function googleLogin(Request $request)
     {
-        $client = new Google_Client(['client_id' => env('GOOGLE_CLIENT_ID')]);
+        $idToken = $request->id_token;
 
-        $payload = $client->verifyIdToken($request->id_token);
+        // Gọi API của Google để xác thực token
+        $client = new \GuzzleHttp\Client();
+        $res = $client->get("https://oauth2.googleapis.com/tokeninfo?id_token={$idToken}");
 
-        if (!$payload) {
+        if ($res->getStatusCode() != 200) {
             return response()->json(['message' => 'Token không hợp lệ'], 401);
         }
 
-        $email = $payload['email'];
-        $name  = $payload['name'];
-        $googleId = $payload['sub'];
+        $payload = json_decode($res->getBody(), true);
 
-        $user = User::where('email', $email)->first();
+        // Lấy thông tin cơ bản
+        $email = $payload['email'] ?? null;
+        $name  = $payload['name'] ?? null;
+        $googleId = $payload['sub'] ?? null;
 
-        if (!$user) {
-            $user = User::create([
-                "name" => $name,
-                "email" => $email,
-                "role" => "person",
-                'email_verified_at' => now(),
-                'created_at' => now(),
-                'updated_at' => now()
-            ]);
+        if (!$email) {
+            return response()->json(['message' => 'Không lấy được email'], 400);
         }
-        $user->tokens()->delete();
 
+        $user = User::firstOrCreate(
+            ['email' => $email],
+            [
+                'name' => $name,
+                'role' => 'person',
+                'email_verified_at' => now(),
+            ]
+        );
+
+        $user->tokens()->delete();
         $token = $user->createToken('token')->plainTextToken;
-        $cookie = cookie('token', $token, 14400, '/',);
-        $response = response()->json([
-            'user' => $request->user(),
-            'token' => $token
-        ]);
-        $response->withCookie($cookie);
-        return $response;
+
+        return response()
+            ->json([
+                'user' => $user,
+                'token' => $token
+            ])
+            ->cookie('token', $token, 14400, '/');
     }
+
     public function verifyRegister(Request $request)
     {
         $data = $request->input();
