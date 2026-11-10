@@ -2,15 +2,25 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasSlug;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 
 class Example extends Model
 {
-    use HasFactory;
+    use HasFactory, HasSlug;
+
+    /** Cột được phép dùng trong ?orderBy= */
+    public const SORTABLE = ['count_test', 'count_like', 'created_at', 'updated_at', 'num_question', 'name'];
+
+    public function slugSource(): string
+    {
+        return (string) $this->name;
+    }
     protected $fillable = [
         'name',
+        'slug',
         'count_test',
         'count_like',
         'num_question',
@@ -21,7 +31,7 @@ class Example extends Model
     public function user()
     {
         return $this->belongsTo(User::class, 'user_id')
-            ->select(["id", "name", "email", "avatar", "role"]);
+            ->select(["id", "slug", "name", "email", "avatar", "role"]);
     }
     public function sector()
     {
@@ -43,7 +53,7 @@ class Example extends Model
     }
     public function scopeMyFavorite($query, $search = null)
     {
-        $id = auth('sanctum')->id();
+        $id = auth('api')->id();
         return $query
             ->withAll()
             ->whereHas('userActions', function ($q) use ($id) {
@@ -57,7 +67,7 @@ class Example extends Model
 
     public function scopeWithUserAction($query)
     {
-        $id = auth('sanctum')->id();
+        $id = auth('api')->id();
         return $query->with(['userAction' => function ($q) use ($id) {
             $q->where('user_id', $id);
         }]);
@@ -68,7 +78,7 @@ class Example extends Model
     }
     public function scopeWithAll($query)
     {
-        $id = auth('sanctum')->id();
+        $id = auth('api')->id();
         return $query->with(['user', 'sector'])->with(['userAction' => function ($q) use ($id) {
             $q->where('user_id', $id);
         }]);
@@ -84,27 +94,32 @@ class Example extends Model
     public function scopeFilter($query, $filters)
     {
         return $query
-            ->when($filters['search'] ?? null, function ($q, $search) {
-                $q->where('name', 'like', "%$search%");
+            // Tìm theo tên đề hoặc tên tác giả (gom trong 1 nhóm để không phá các điều kiện khác).
+            ->when(trim((string) ($filters['search'] ?? '')) !== '', function ($q) use ($filters) {
+                // Escape % và _ để người dùng gõ ký tự này không thành wildcard.
+                $search = '%' . addcslashes(trim($filters['search']), '%_\\') . '%';
+                $q->where(function ($w) use ($search) {
+                    $w->where('examples.name', 'like', $search)
+                        ->orWhereHas('user', fn ($u) => $u->where('name', 'like', $search));
+                });
             })
+            // Lọc theo slug ngành (vd ?sector=cong-nghe-thong-tin)
             ->when(!empty($filters['sector']), function ($q) use ($filters) {
-                $q->where('sector_id', $filters['sector']);
+                $q->whereHas('sector', fn ($s) => $s->where('slug', $filters['sector']));
             })
-            ->when($filters['test'] ?? null, function ($q, $orderby) {
-
-                $q->orderBy(
-                    'examples.count_test',
-                    $orderby
-                );
+            // Lọc theo số câu hỏi (?min_questions=30&max_questions=60)
+            ->when(is_numeric($filters['min_questions'] ?? null), function ($q) use ($filters) {
+                $q->where('examples.num_question', '>=', (int) $filters['min_questions']);
             })
-            ->when($filters['orderBy'] ?? null, function ($q, $orderby) use ($filters) {
-
-                // if (!empty($filters['sort'])) {
-                $q->orderBy("examples.$orderby", $filters['sort'] ?? 'desc');
-                // }
-            });
-        // ->when($filters['type'] ?? null, function ($q, $type) {
-        //     $q->where('type', $type);
-        // });
+            ->when(is_numeric($filters['max_questions'] ?? null), function ($q) use ($filters) {
+                $q->where('examples.num_question', '<=', (int) $filters['max_questions']);
+            })
+            // Chỉ cho sắp xếp theo các cột cho phép (bản cũ nối thẳng chuỗi → SQL injection).
+            ->when(in_array($filters['orderBy'] ?? null, self::SORTABLE, true), function ($q) use ($filters) {
+                $sort = strtolower($filters['sort'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+                $q->orderBy('examples.' . $filters['orderBy'], $sort);
+            })
+            // Thứ tự phụ cố định → phân trang không lặp / sót đề khi nhiều đề trùng giá trị.
+            ->orderBy('examples.id', 'desc');
     }
 }

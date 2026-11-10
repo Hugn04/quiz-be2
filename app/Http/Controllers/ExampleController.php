@@ -3,266 +3,218 @@
 namespace App\Http\Controllers;
 
 use App\Models\Example;
+use App\Models\Sector;
 use App\Models\UserAction;
-use Cloudinary\Cloudinary;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 class ExampleController extends Controller
 {
-    public function createExample(Request $request)
-    {
-        $data = $request->input();
-
-        $questionId = DB::table('questions')->insertGetId([
-            'question' => $data['question'],
-        ]);
-        DB::table('examples')->insert([
-            'name' => $data['name'],
-            'count_test' => 0,
-            'count_like' => 0,
-            'num_question' => $data['count_question'],
-            'credits' => $data['credits'],
-            'sector_id' => $data['sector'],
-            'question_id' => $questionId,
-            'user_id' => auth()->user()->id,
-            'created_at' => now(),
-            'updated_at' => now()
-
-        ]);
-        return $data;
-    }
-    public function updateMyExample(Request $request)
-    {
-
-        $id = $request->input("id");
-        if (!$this->isMyExample(id: $id)) {
-            return response()->json("Bạn không có quyên vào đề này", 403);
-        }
-        $sector = $request->input("sector");
-        $credits = $request->input("credits");
-        $image = $request->input("image");
-        Log::debug($image);
-        $name = $request->input("name");
-        $question = $request->input('question');
-        $count_question = $request->input("count_question");
-
-        $example = Example::with(['user', 'question'])->findOrFail($id);
-
-        $example->update([
-            'num_question' => $count_question,
-            'name' => $name,
-            'credits' => $credits,
-            'image' => $image,
-            'sector_id' => $sector,
-        ]);
-        if ($example->question) {
-            $example->question->update([
-                'question' => $question,
-            ]);
-        }
-        return response()->json($example);
-    }
-    public function deleteExapmle(Request $request)
-    {
-        $id = $request->input("id");
-        if (!$this->isMyExample(id: $id)) {
-            return response()->json("Bạn không có quyên xóa đề này", 403);
-        }
-
-        $example = DB::table('examples')
-            ->where('id', $id);
-        $url = $example->get('image')[0]->image;
-        $public_id = pathinfo(basename($url), PATHINFO_FILENAME);
-        if ($public_id) {
-            cloudinary()->destroy('img_quiz/' . $public_id);
-        }
-        $idQuestion = $example->get()[0]->question_id;
-        $example->delete();
-        DB::table('questions')->where('id', $idQuestion)->delete(); //->delete();
-
-        return response()->json('Bạn đã xóa thành công');
-    }
-    public function getAllExample(Request $request)
+    /** GET /examples — danh sách đề (công khai), lọc + phân trang qua query string. */
+    public function index(Request $request)
     {
         $perPage = $request->query('per_page', 9);
-        $result = Example::filter($request->all())->withAll()
-            ->paginate($perPage);
+        $result = Example::filter($request->all())->withAll()->paginate($perPage);
 
         return response()->json($result);
     }
-    public function getQuestion(Request $request)
-    {
-        $id = $request->input('id');
-        $result = Example::where('id', $id)->with(["userAction", "user", "question"])->first();
-        $data = $result->toArray();
-        if (isset($data['question']['question'])) {
-            $data['question'] = $data['question']['question'];
-        }
-        return response()->json($data);
-    }
-    private function isMyExample($id)
-    {
-        $userId = Example::where('id', $id)->first('user_id')->user_id;
-        if (auth()->user()->id != $userId) {
-            return false;
-        }
-        return true;
-    }
-    public function getMyQuestion(Request $request)
-    {
-        $idExample = $request->input('id');
-        if (!$this->isMyExample($idExample)) {
-            return response()->json("Bạn không có quyên vào đề này", 403);
-        }
-        $question = Example::where("id", $idExample)->withAll()->with('question')->first();
-        $question = $question->toArray();
-        if (isset($question['question']['question'])) {
-            $question['question'] = $question['question']['question'];
-        }
-        return response()->json($question);
-    }
-    public function getMyExample(Request $request)
+
+    /** GET /users/me/examples — đề do tôi tạo. */
+    public function mine(Request $request)
     {
         $perPage = $request->query('per_page', 9);
-        $id = auth()->user()->id;
-        $examples = Example::where("user_id", $id)->filter($request->all())->withAll()
+        $examples = Example::where('user_id', auth()->id())
+            ->filter($request->all())
+            ->withAll()
             ->paginate($perPage);
+
         return response()->json($examples);
     }
-    public function getMyFavorite(Request $request)
+
+    /** GET /users/me/favorites — đề tôi đã đánh dấu yêu thích. */
+    public function favorites(Request $request)
     {
         $perPage = $request->query('per_page', 9);
         $examples = Example::filter($request->all())->myFavorite()->paginate($perPage);
+
         return response()->json($examples);
     }
-    public function uploadImage(Request $request)
+
+    /**
+     * GET /examples/{example} — chi tiết đề kèm bộ câu hỏi.
+     * (Gộp getQuestion + getMyQuestion cũ; quyền sửa được kiểm tra ở PUT.)
+     */
+    public function show(Example $example)
     {
-        $id = $request->input('id');
-        $image = $request->file('image');
-        $uploadedFileUrl = '';
-        if ($image) {
-            $file = $image->getRealPath();
-            $uploadedFileUrl = cloudinary()->upload($file, [
-                'folder' => env('CLOUDINARY_FOLDER', 'test')
-            ])->getSecurePath();
+        $data = Example::withAll()->with('question')->findOrFail($example->id)->toArray();
+        if (isset($data['question']['question'])) {
+            $data['question'] = $data['question']['question'];
         }
-        if ($id) {
-            $response = cloudinary()->destroy(env('CLOUDINARY_FOLDER', 'test') . '/' . $id,);
+
+        return response()->json($data);
+    }
+
+    /** POST /examples — tạo đề. */
+    public function store(Request $request)
+    {
+        $data = $request->input();
+
+        $example = DB::transaction(function () use ($data) {
+            $questionId = DB::table('questions')->insertGetId([
+                'question' => $data['question'],
+            ]);
+            $exampleId = DB::table('examples')->insertGetId([
+                'name' => $data['name'],
+                'slug' => Example::uniqueSlug($data['name']),
+                'count_test' => 0,
+                'count_like' => 0,
+                'num_question' => $data['count_question'],
+                'credits' => $data['credits'],
+                'image' => $data['image'] ?? null,
+                'sector_id' => $this->sectorId($data['sector'] ?? null),
+                'question_id' => $questionId,
+                'user_id' => auth()->id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            return Example::withAll()->findOrFail($exampleId);
+        });
+
+        return response()->json($example, 201);
+    }
+
+    /** PUT /examples/{example} — sửa đề của tôi. */
+    public function update(Request $request, Example $example)
+    {
+        if (!$this->isOwner($example)) {
+            return response()->json('Bạn không có quyền sửa đề này', 403);
+        }
+
+        $example->update([
+            'num_question' => $request->input('count_question'),
+            'name' => $request->input('name'),
+            'credits' => $request->input('credits'),
+            'image' => $request->input('image'),
+            'sector_id' => $this->sectorId($request->input('sector')),
+        ]);
+        $example->load(['user', 'question']);
+        if ($example->question) {
+            $example->question->update([
+                'question' => $request->input('question'),
+            ]);
+        }
+
+        return response()->json($example);
+    }
+
+    /** DELETE /examples/{example} — xóa đề của tôi (kèm ảnh + bộ câu hỏi). */
+    public function destroy(Example $example)
+    {
+        if (!$this->isOwner($example)) {
+            return response()->json('Bạn không có quyền xóa đề này', 403);
+        }
+
+        $publicId = $example->image ? pathinfo(basename($example->image), PATHINFO_FILENAME) : null;
+        if ($publicId) {
+            cloudinary()->destroy('img_quiz/' . $publicId);
+        }
+        $questionId = $example->question_id;
+        $example->delete();
+        DB::table('questions')->where('id', $questionId)->delete();
+
+        return response()->noContent();
+    }
+
+    /** PUT /examples/{example}/like — body { like: bool }. */
+    public function like(Request $request, Example $example)
+    {
+        $request->validate(['like' => 'required|boolean']);
+        $like = $request->boolean('like');
+
+        $action = $this->userAction($example);
+        // Chỉ đổi bộ đếm khi trạng thái thực sự thay đổi (tránh like 2 lần bị +2).
+        if ((bool) $action->like !== $like) {
+            $like ? $example->increment('count_like') : $example->decrement('count_like');
+            $action->like = $like;
+            $action->save();
         }
 
         return response()->json([
-            'url' => $uploadedFileUrl,
+            'count_like' => $example->fresh()->count_like,
+            'like' => $like,
         ]);
     }
 
-
-    public function updateLike(Request $request)
+    /** PUT /examples/{example}/favorite — body { favorited: bool }. */
+    public function favorite(Request $request, Example $example)
     {
-        $request->validate([
-            'example_id' => 'required|exists:examples,id',
-            'like' => 'required|boolean'
-        ]);
+        $request->validate(['favorited' => 'required|boolean']);
+        $favorited = $request->boolean('favorited');
 
-        $existingAction = UserAction::where([['user_id', auth()->user()->id], ['example_id', $request->example_id]])
-            ->first();
-        $example = DB::table('examples')->where('id', $request->example_id);
-        if ($request->like) {
-            $example->increment('count_like');
-        } else {
-            $example->decrement('count_like');
-        }
+        $action = $this->userAction($example);
+        $action->favorited = $favorited;
+        $action->save();
 
-
-        if ($existingAction) {
-            $existingAction->update([
-                "like" => $request->like,
-            ]);
-        } else {
-
-            UserAction::create([
-                'user_id' => auth()->user()->id,
-                'example_id' => $request->example_id,
-                'like' => $request->like,
-                'favorited' => false
-            ]);
-        }
-
-        return response()->json([
-            'count_like' => $example->first('count_like')->count_like,
-            'like' => $request->like
-        ], 201);
+        return response()->json(['favorited' => $favorited]);
     }
 
-    public function updateFavorite(Request $request)
-    {
-        $request->validate([
-            'example_id' => 'required|exists:examples,id',
-            'favorited' => 'required|boolean'
-        ]);
-
-        $existingAction = UserAction::where([['user_id', auth()->user()->id], ['example_id', $request->example_id]])
-            ->first();
-        if ($existingAction) {
-            $existingAction->update([
-                "favorited" => $request->favorited,
-            ]);
-        } else {
-            UserAction::create([
-                'user_id' => auth()->user()->id,
-                'example_id' => $request->example_id,
-                'like' => false,
-                'favorited' => $request->favorited,
-            ]);
-        }
-
-
-        return response()->json($request->favorited, 201);
-    }
-
-    public function getExampleFromQuiz(Request $request)
+    /** GET /eduquiz-exams/{tag}?type=EDUQUIZ — lấy đề từ EduQuiz (chỉ admin). */
+    public function importFromEduquiz(Request $request, string $tag)
     {
         if (auth()->user()->role != 'admin') {
-            return response()->json("Bạn không có quyền này !", 400);
+            return response()->json("Bạn không có quyền này !", 403);
         }
 
         $result = [];
         try {
-            $params = $request->input('tagExample');
             $type = $request->input('type');
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer 892475|ZdHRPg6gPE3LsJXuLeLIoTtetrwlEZkH9ZLEdxGG',
                 'Accept' => 'application/json',
-            ])->get('https://studio-gw-01.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/' . $params . '/sections?bizapp=' . $type . '&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true');
+            ])->get('https://studio-api-07.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/' . $tag . '/sections?bizapp=' . $type . '&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true');
+            if (!$response->successful()) {
+                return response()->json("Không lấy được đề từ EduQuiz", 502);
+            }
             $data = $response['data'];
-            foreach ($data as $key => $part) {
+            foreach ($data as $part) {
                 $objParts = ['name' => $part['name'], 'questions' => []];
-                $questions = $part['questions'];
-                foreach ($questions as $key => $question) {
-
+                foreach ($part['questions'] as $question) {
                     $objQuestion = ['name' => $question['name'], 'img' => $question['files'], 'answers' => []];
-                    $answers = $question['answers'];
-                    foreach ($answers as $key => $answer) {
-                        $objAnswer = ['option' => $answer['option'], 'is_correct' => $answer['is_correct']];
-                        array_push($objQuestion['answers'], $objAnswer);
+                    foreach ($question['answers'] as $answer) {
+                        $objQuestion['answers'][] = ['option' => $answer['option'], 'is_correct' => $answer['is_correct']];
                     }
-                    array_push($objParts['questions'], $objQuestion);
+                    $objParts['questions'][] = $objQuestion;
                 }
-                array_push($result, $objParts);
+                $result[] = $objParts;
             }
-            if ($response->successful()) {
-                return response()->json($result);
-            } else {
-                return response("lỗi http");
-            }
+
+            return response()->json($result);
         } catch (\Throwable $th) {
-            return response("Đề thi bị lỗi", 400);
+            return response()->json("Đề thi bị lỗi", 400);
         }
+    }
+
+    /** Body gửi `sector` là slug ngành → đổi sang id để lưu khóa ngoại. */
+    private function sectorId(?string $slug): ?int
+    {
+        return $slug ? Sector::where('slug', $slug)->value('id') : null;
+    }
+
+    private function isOwner(Example $example): bool
+    {
+        return auth()->id() == $example->user_id;
+    }
+
+    /** Bản ghi like/favorite của user hiện tại với đề (tạo mới nếu chưa có). */
+    private function userAction(Example $example): UserAction
+    {
+        return UserAction::firstOrNew(
+            ['user_id' => auth()->id(), 'example_id' => $example->id],
+            ['like' => false, 'favorited' => false],
+        );
     }
 }
 
-//https://studio-gw.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/13995/sections?bizapp=EDUQUIZ&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true
 //https://studio-gw.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/13995/sections?bizapp=EDUQUIZ&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true

@@ -2,63 +2,62 @@
 
 namespace App\Http\Controllers;
 
-use App\Mail\OTPVerify;
-use App\Mail\ForgotPassword;
-use App\Models\Example;
 use App\Models\User;
-use Google_Client;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Cookie;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 
 class UserController extends Controller
 {
-    public function getProfile(Request $request)
+    /** GET /users/me — trang cá nhân của tôi. */
+    public function me()
     {
-        $id = $request->input('id');
-        $email = $request->input('email');
-        if (!$id && $email == 'this') {
-            $id = auth()->user()->id;
-            $email = auth()->user()->email;
-        }
-        $user = User::where([['id', $id], ['email', 'like', '%' . $email  . '%']])->first();
-        $user = $user->load([
-            'examples' => function ($q) {
-                $q->limit(4); // hoặc ->take(4)
-            },
-            'examples.userAction',
-            'examples.user',
-            'examples.sector',
+        return response()->json($this->profile(auth()->user()));
+    }
+
+    /** GET /users/{slug} — trang cá nhân của 1 người dùng (kèm 4 đề gần nhất). */
+    public function show(User $user)
+    {
+        return response()->json($this->profile($user));
+    }
+
+    /**
+     * PATCH /users/me — sửa thông tin của tôi.
+     * Chỉ cho sửa các trường an toàn (bản cũ update nguyên body → có thể tự đổi role).
+     */
+    public function updateMe(Request $request)
+    {
+        $data = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'avatar' => 'sometimes|nullable|string|max:2048',
+            'banner' => 'sometimes|nullable|string|max:2048',
         ]);
-        if ($user) {
-            return response()->json($user);
-        } else {
-            return response()->json('Không có người dùng này', 404);
-        }
-    }
-    public function updateProfile(Request $request)
-    {
-        $data = $request->input();
-        $user = DB::table('users')->where('id', auth()->user()->id)->update($data);
-        return response()->json($user);
+
+        $user = auth()->user();
+        $user->forceFill($data)->save();
+
+        return response()->json($user->fresh());
     }
 
-    public function getUsers(Request $request)
+    /** GET /users?ids=1,2,3 — thông tin rút gọn của nhiều người dùng. */
+    public function index(Request $request)
     {
-        // Lấy danh sách ID từ request
-        $ids = $request->input('ids');
-
-        if (!is_array($ids) || empty($ids)) {
-            return response()->json(['message' => 'Invalid request'], 400);
+        $ids = $request->query('ids');
+        $ids = is_array($ids) ? $ids : array_filter(explode(',', (string) $ids));
+        if (empty($ids)) {
+            return response()->json(['message' => 'Thiếu tham số ids'], 422);
         }
-
 
         $users = User::whereIn('id', $ids)->select('id', 'name', 'avatar')->get();
 
         return response()->json($users);
+    }
+
+    private function profile(User $user): User
+    {
+        return $user->load([
+            'examples' => fn ($q) => $q->limit(4),
+            'examples.userAction' => fn ($q) => $q->where('user_id', auth()->id()),
+            'examples.user',
+            'examples.sector',
+        ]);
     }
 }

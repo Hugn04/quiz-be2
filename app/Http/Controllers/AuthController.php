@@ -5,13 +5,12 @@ namespace App\Http\Controllers;
 use App\Mail\OTPVerify;
 use App\Mail\ForgotPassword;
 use App\Models\User;
-use Google\Auth\AccessToken;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Log;
 
@@ -19,72 +18,135 @@ use Log;
 class AuthController extends Controller
 {
 
+    /**
+     * Trả JWT trong cookie HttpOnly `token` (middleware CheckToken đổi thành Bearer).
+     * Cookie sống bằng hạn refresh để client còn gọi được /auth/refresh khi access token hết hạn.
+     */
+    private function respondWithToken(string $token, User $user, int $status = 200)
+    {
+        return response()
+            ->json([
+                'user' => $user,
+                'token_type' => 'bearer',
+                'expires_in' => auth('api')->factory()->getTTL() * 60,
+            ], $status)
+            ->cookie('token', $token, (int) config('jwt.refresh_ttl'), '/');
+    }
+
+    /** POST /auth/login */
     public function login(Request $request)
     {
-
-        Cookie::queue(Cookie::forget(name: 'token'));
-        if (Auth::attempt(["email" => $request->input("email"), "password" => $request->input("password")], $request->input("remember"))) {
-            auth()->user()->tokens()->delete();
-            $token = $request->user()->createToken("token")->plainTextToken;
-            $cookie = cookie('token', $token, 14400, '/',);
-            $response = response()->json([
-                'user' => $request->user(),
-                'token' => $token
-            ]);
-            $response->withCookie($cookie);
-            return $response;
+        $token = auth('api')->attempt([
+            'email' => $request->input('email'),
+            'password' => $request->input('password'),
+        ]);
+        if (!$token) {
+            return response()->json(['message' => "Tên tài khoản hoặc mật khẩu không chính xác"], 401);
         }
-        return response()->json(
-            [
-                'message' => "Tên tài khoản hoặc mật khẩu không chính xác"
-            ],
-            401
-        );
+
+        return $this->respondWithToken($token, auth('api')->user());
     }
+
+    /**
+     * POST /auth/refresh — đổi JWT (kể cả đã hết hạn, còn trong hạn refresh) lấy JWT mới.
+     * Token cũ bị đưa vào blacklist.
+     */
+    public function refresh()
+    {
+        try {
+            $token = auth('api')->refresh();
+            $guard = auth('api')->setToken($token);
+            $user = $guard->user();
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401)
+                ->withoutCookie('token');
+        }
+        // Token phát hành trước lần đổi mật khẩu gần nhất → không cho làm mới.
+        if (!$user || (int) $guard->payload()->get('ver') !== (int) $user->token_version) {
+            $guard->invalidate();
+            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401)
+                ->withoutCookie('token');
+        }
+
+        return $this->respondWithToken($token, $user);
+    }
+    /**
+     * POST /auth/google — đăng nhập Google.
+     * Nhận `access_token` (nút tự vẽ, useGoogleLogin) hoặc `id_token` (nút GoogleLogin cũ).
+     * Token phải được cấp cho đúng Client ID của app (`aud`), nếu không thì token
+     * của một ứng dụng khác cũng đăng nhập được vào tài khoản cùng email.
+     */
     public function googleLogin(Request $request)
     {
-        $idToken = $request->id_token;
-
-        // Gọi API của Google để xác thực token
-        $client = new \GuzzleHttp\Client();
-        $res = $client->get("https://oauth2.googleapis.com/tokeninfo?id_token={$idToken}");
-
-        if ($res->getStatusCode() != 200) {
-            return response()->json(['message' => 'Token không hợp lệ'], 401);
+        $clientId = config('services.google.client_id');
+        if (!$clientId) {
+            Log::error('Thiếu GOOGLE_CLIENT_ID trong .env');
+            return response()->json(['message' => 'Máy chủ chưa cấu hình đăng nhập Google'], 500);
         }
 
-        $payload = json_decode($res->getBody(), true);
+        $profile = $request->filled('access_token')
+            ? $this->googleProfileFromAccessToken($request->input('access_token'), $clientId)
+            : ($request->filled('id_token')
+                ? $this->googleProfileFromIdToken($request->input('id_token'), $clientId)
+                : null);
 
-        // Lấy thông tin cơ bản
-        $email = $payload['email'] ?? null;
-        $name  = $payload['name'] ?? null;
-        $googleId = $payload['sub'] ?? null;
-
-        if (!$email) {
-            return response()->json(['message' => 'Không lấy được email'], 400);
+        if (!$profile) {
+            return response()->json(['message' => 'Phiên đăng nhập Google không hợp lệ, vui lòng thử lại'], 401);
         }
 
         $user = User::firstOrCreate(
-            ['email' => $email],
+            ['email' => $profile['email']],
             [
-                'name' => $name,
+                'name' => $profile['name'] ?: strstr($profile['email'], '@', true),
                 'role' => 'person',
                 'email_verified_at' => now(),
             ]
         );
 
-        $user->tokens()->delete();
-        $token = $user->createToken('token')->plainTextToken;
-
-        return response()
-            ->json([
-                'user' => $user,
-                'token' => $token
-            ])
-            ->cookie('token', $token, 14400, '/');
+        return $this->respondWithToken(auth('api')->login($user), $user);
     }
 
-    public function verifyRegister(Request $request)
+    /** Xác thực access_token → ['email', 'name'] hoặc null. */
+    private function googleProfileFromAccessToken(string $accessToken, string $clientId): ?array
+    {
+        $info = Http::timeout(10)->get('https://oauth2.googleapis.com/tokeninfo', [
+            'access_token' => $accessToken,
+        ]);
+        if (!$info->ok() || $info->json('aud') !== $clientId) {
+            return null;
+        }
+
+        $user = Http::timeout(10)->withToken($accessToken)
+            ->get('https://www.googleapis.com/oauth2/v3/userinfo');
+        if (!$user->ok() || !$user->json('email') || $user->json('email_verified') !== true) {
+            return null;
+        }
+
+        return ['email' => $user->json('email'), 'name' => $user->json('name')];
+    }
+
+    /** Xác thực id_token → ['email', 'name'] hoặc null. */
+    private function googleProfileFromIdToken(string $idToken, string $clientId): ?array
+    {
+        $info = Http::timeout(10)->get('https://oauth2.googleapis.com/tokeninfo', [
+            'id_token' => $idToken,
+        ]);
+        if (
+            !$info->ok()
+            || $info->json('aud') !== $clientId
+            || !in_array($info->json('iss'), ['accounts.google.com', 'https://accounts.google.com'], true)
+            || !$info->json('email')
+            // tokeninfo trả email_verified dạng chuỗi "true"
+            || !filter_var($info->json('email_verified'), FILTER_VALIDATE_BOOLEAN)
+        ) {
+            return null;
+        }
+
+        return ['email' => $info->json('email'), 'name' => $info->json('name')];
+    }
+
+    /** POST /auth/register/otp — gửi OTP xác nhận email đăng ký. */
+    public function sendRegisterOtp(Request $request)
     {
         $data = $request->input();
         $email = $data['email'];
@@ -98,6 +160,7 @@ class AuthController extends Controller
             return response()->json("Đã gửi email tới " . $email . ". Vui lòng kiểm tra email!");
         }
     }
+    /** POST /auth/register — xác nhận OTP + tạo tài khoản. */
     public function register(Request $request)
     {
         $data = $request->input();
@@ -130,7 +193,8 @@ class AuthController extends Controller
         }
         return $dataOTP;
     }
-    public function verifyForgotPassword(Request $request)
+    /** POST /auth/password/reset/otp — gửi OTP quên mật khẩu. */
+    public function sendResetPasswordOtp(Request $request)
     {
         $data = $request->input();
         $email = $data['email'];
@@ -141,10 +205,11 @@ class AuthController extends Controller
             Mail::to($data['email'])->send(new OTPVerify($otp));
             return response()->json("");
         } else {
-            return response()->json('Email không tồn tại !', 409);
+            return response()->json('Email không tồn tại !', 404);
         }
     }
-    public function forgotPassword(Request $request)
+    /** POST /auth/password/reset — xác nhận OTP, đặt mật khẩu ngẫu nhiên và gửi qua email. */
+    public function resetPassword(Request $request)
     {
         $data = $request->input();
         $email = $data['email'];
@@ -153,14 +218,17 @@ class AuthController extends Controller
         if ($dataOTP === true) {
             $password = $this->generateRandomPassword(6);
             User::where('email', $email)->update([
-                'password' => bcrypt($password)
+                'password' => bcrypt($password),
             ]);
+            // Thu hồi mọi JWT cũ của tài khoản.
+            User::where('email', $email)->increment('token_version');
             Mail::to($data['email'])->send(new ForgotPassword($password));
             return response()->json('Mật khẩu của bạn đã được gửi đến ' . $email);
         }
         return $dataOTP;
     }
 
+    /** PUT /auth/password — đổi mật khẩu (cần mật khẩu cũ). */
     public function changePassword(Request $request)
     {
 
@@ -169,19 +237,22 @@ class AuthController extends Controller
         if (strlen($newPassword) >= 6 && $oldPassword) {
             $user = User::find(auth()->user()->id);
             if ($user->password === null) {
-                return response()->json('Bạn chưa đăng ký tài khoản này !', 401);
+                return response()->json('Bạn chưa đăng ký tài khoản này !', 422);
             }
             if (Hash::check($oldPassword, $user->password)) {
                 $user->update([
                     'password' => Hash::make($newPassword)
                 ]);
-                auth()->user()->tokens()->delete();
-                return response()->json('Đổi mật khẩu thành công. Vui lòng đăng nhập lại !');
+                // Thu hồi mọi JWT của tài khoản (mọi thiết bị) + token hiện tại.
+                $user->increment('token_version');
+                auth('api')->invalidate();
+                return response()->json('Đổi mật khẩu thành công. Vui lòng đăng nhập lại !')
+                    ->withoutCookie('token');
             } else {
-                return response()->json('Bạn nhập lại mật khẩu cũ bị sai !', 401);
+                return response()->json('Bạn nhập lại mật khẩu cũ bị sai !', 422);
             }
         } else {
-            return response()->json("Bạn chưa nhập đủ mật khẩu", 401);
+            return response()->json("Bạn chưa nhập đủ mật khẩu", 422);
         }
     }
     private function verifyOTP($email, $otp)
@@ -194,7 +265,7 @@ class AuthController extends Controller
             Cache::pull('otp_' . $email);
             return true;
         }
-        return response()->json('OTP không hợp lệ vui lòng nhập lại !', 401);
+        return response()->json('OTP không hợp lệ vui lòng nhập lại !', 422);
     }
 
     function generateRandomPassword($length = 6)
@@ -217,15 +288,16 @@ class AuthController extends Controller
         }
         return $otp;
     }
-    public function auth(Request $request)
+    /** GET /auth/me — người dùng đang đăng nhập. */
+    public function me()
     {
-        return response()->json($request->user());
+        return response()->json(auth('api')->user());
     }
+    /** POST /auth/logout */
     public function logout()
     {
+        auth('api')->logout(); // đưa token hiện tại vào blacklist
 
-        auth()->user()->tokens()->delete();
-
-        return response()->json("Thanh cong")->withoutCookie(Cookie::forget('token'));
+        return response()->json("Đăng xuất thành công")->withoutCookie('token');
     }
 }

@@ -6,11 +6,19 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Sanctum\HasApiTokens;
+use App\Models\Concerns\HasSlug;
+use Illuminate\Support\Str;
+use PHPOpenSourceSaver\JWTAuth\Contracts\JWTSubject;
 
-class User extends Authenticatable
+class User extends Authenticatable implements JWTSubject
 {
-    use  HasApiTokens, HasFactory, Notifiable;
+    use HasFactory, Notifiable, HasSlug;
+
+    /** Slug từ phần trước @ của email (vd hung2k4hytq@gmail.com → hung2k4hytq). */
+    public function slugSource(): string
+    {
+        return Str::before((string) $this->email, '@') ?: (string) $this->name;
+    }
 
     /**
      * The attributes that are mass assignable.
@@ -19,6 +27,7 @@ class User extends Authenticatable
      */
     protected $fillable = [
         'name',
+        'slug',
         'email',
         'role',
         'password',
@@ -34,6 +43,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'token_version',
         'email_verified_at',
         'updated_at',
         'created_at'
@@ -51,6 +61,21 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
+    /** Định danh đưa vào claim `sub` của JWT. */
+    public function getJWTIdentifier()
+    {
+        return $this->getKey();
+    }
+
+    /** Claim thêm: quyền (role) + phiên bản token (thu hồi khi đổi mật khẩu). */
+    public function getJWTCustomClaims(): array
+    {
+        return [
+            'role' => $this->role,
+            'ver' => (int) $this->token_version,
+        ];
+    }
+
     public function examples()
     {
         return $this->hasMany(Example::class, 'user_id');
