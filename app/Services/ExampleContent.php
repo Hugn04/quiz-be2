@@ -22,6 +22,10 @@ class ExampleContent
     /** Quan hệ cần eager load trước khi gọi toArray(). */
     public const RELATIONS = ['parts.questions.answers', 'parts.questions.media'];
 
+    public function __construct(private CloudinaryImages $images)
+    {
+    }
+
     /**
      * Ghi đè toàn bộ nội dung đề bằng `$parts` (đã validate) và cập nhật `num_question`.
      * Trả về tổng số câu hỏi.
@@ -29,6 +33,7 @@ class ExampleContent
     public function sync(Example $example, array $parts): int
     {
         return DB::transaction(function () use ($example, $parts) {
+            $oldMedia = $this->mediaUrls($example);
             // Xóa phần cũ → câu hỏi / đáp án / media xóa theo (cascade).
             $example->parts()->delete();
 
@@ -77,6 +82,11 @@ class ExampleContent
 
             $example->forceFill(['num_question' => $total])->save();
 
+            // Ảnh câu hỏi không còn dùng trong nội dung mới → xóa trên Cloudinary (sau commit).
+            foreach ($oldMedia as $url) {
+                $this->images->delete($url);
+            }
+
             return $total;
         });
     }
@@ -105,5 +115,18 @@ class ExampleContent
                 ])->all(),
             ])->all(),
         ])->all();
+    }
+
+    /** URL ảnh của mọi câu hỏi trong đề. */
+    public function mediaUrls(Example $example): array
+    {
+        return DB::table('question_media')
+            ->join('questions', 'questions.id', '=', 'question_media.question_id')
+            ->join('parts', 'parts.id', '=', 'questions.part_id')
+            ->where('parts.example_id', $example->id)
+            ->pluck('question_media.url')
+            ->unique()
+            ->values()
+            ->all();
     }
 }

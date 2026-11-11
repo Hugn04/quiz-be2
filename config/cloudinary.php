@@ -34,6 +34,9 @@ return [
     */
     'cloud_url' => env('CLOUDINARY_URL'),
 
+    /** Thư mục chứa ảnh upload của app (xem App\Services\CloudinaryImages). */
+    'folder' => env('CLOUDINARY_FOLDER', 'test'),
+
     /**
      * Upload Preset From Cloudinary Dashboard
      *

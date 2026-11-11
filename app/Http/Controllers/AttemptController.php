@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Attempt;
 use App\Models\Example;
 use App\Models\User;
+use App\Services\AttemptRecorder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -14,8 +15,9 @@ class AttemptController extends Controller
      * POST /examples/{example}/attempts — nộp 1 lượt làm bài.
      * Frontend có thể gửi bằng navigator.sendBeacon (body JSON dạng text) khi rời trang.
      * Lượt chưa trả lời câu nào bị từ chối (không tính lượt thi).
+     * Chi tiết từng câu lưu ở attempt_answers (xem AttemptRecorder).
      */
-    public function store(Request $request, Example $example)
+    public function store(Request $request, Example $example, AttemptRecorder $recorder)
     {
         $raw = json_decode($request->getContent(), true);
         if (is_array($raw)) {
@@ -31,22 +33,16 @@ class AttemptController extends Controller
             'unanswered_count' => ['nullable', 'integer', 'min:0', 'max:65535'],
             'duration_seconds' => ['nullable', 'integer', 'min:0', 'max:86400'],
             'answers' => ['nullable', 'array', 'max:2000'],
+            'answers.*.question_id' => ['nullable', 'integer'],
+            'answers.*.correct' => ['required', 'boolean'],
+            'answers.*.response' => ['nullable'],
+            'answers.*.answer_ids' => ['nullable', 'array', 'max:100'],
         ]);
 
-        if ($data['correct_count'] + $data['wrong_count'] < 1) {
+        $attempt = $recorder->record($example, auth()->id(), $data);
+        if (!$attempt) {
             return response()->json(['message' => 'Chưa trả lời câu nào, không ghi nhận lượt thi.'], 422);
         }
-
-        $attempt = DB::transaction(function () use ($data, $example) {
-            $example->increment('count_test');
-
-            return Attempt::create([
-                ...$data,
-                'score' => round($data['score'], 2),
-                'user_id' => auth()->id(),
-                'example_id' => $example->id,
-            ]);
-        });
 
         return response()->json($attempt, 201);
     }
@@ -104,7 +100,7 @@ class AttemptController extends Controller
             ->where('user_id', $me->id)
             ->latest()
             ->limit(5)
-            ->get(['id', 'score', 'earned_points', 'total_points', 'correct_count', 'wrong_count',
+            ->get(['ulid', 'score', 'earned_points', 'total_points', 'correct_count', 'wrong_count',
                 'unanswered_count', 'duration_seconds', 'created_at']);
 
         return response()->json([
@@ -112,5 +108,62 @@ class AttemptController extends Controller
             'user_score' => $userScore,
             'my_attempts' => $recent,
         ]);
+    }
+
+    /**
+     * GET /users/me/attempts — lịch sử làm bài của tôi (mới nhất trước), phân trang.
+     * ?example={slug} lọc theo đề, ?per_page= (≤ 50, mặc định 20).
+     */
+    public function mine(Request $request)
+    {
+        $request->validate([
+            'example' => ['nullable', 'string', 'max:255'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
+        ]);
+
+        $attempts = Attempt::where('user_id', auth()->id())
+            ->when($request->query('example'), fn ($q, $slug) => $q->whereHas(
+                'example',
+                fn ($e) => $e->where('slug', $slug),
+            ))
+            ->with('example:id,slug,name')
+            ->latest()
+            ->orderByDesc('id')
+            ->paginate((int) $request->query('per_page', 20));
+
+        $attempts->getCollection()->transform(fn (Attempt $attempt) => $this->summary($attempt));
+
+        return response()->json($attempts);
+    }
+
+    /** GET /attempts/{attempt} — chi tiết 1 lượt thi của tôi: từng câu, câu trả lời, đúng / sai. */
+    public function show(Attempt $attempt)
+    {
+        abort_unless((int) $attempt->user_id === (int) auth()->id(), 404);
+
+        $attempt->load(['example:id,slug,name', 'answers']);
+
+        return response()->json([
+            ...$this->summary($attempt),
+            'answers' => $attempt->answers,
+        ]);
+    }
+
+    /** Dữ liệu chung của 1 lượt thi; `example` null khi đề đã bị xóa. */
+    private function summary(Attempt $attempt): array
+    {
+        return [
+            'ulid' => $attempt->ulid,
+            'score' => $attempt->score,
+            'earned_points' => $attempt->earned_points,
+            'total_points' => $attempt->total_points,
+            'correct_count' => $attempt->correct_count,
+            'wrong_count' => $attempt->wrong_count,
+            'unanswered_count' => $attempt->unanswered_count,
+            'duration_seconds' => $attempt->duration_seconds,
+            'created_at' => $attempt->created_at,
+            'example_name' => $attempt->example?->name ?? $attempt->example_name,
+            'example' => $attempt->example?->only(['slug', 'name']),
+        ];
     }
 }

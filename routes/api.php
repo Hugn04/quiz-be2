@@ -3,6 +3,7 @@
 use App\Http\Controllers\AttemptController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExampleController;
+use App\Http\Controllers\HomeController;
 use App\Http\Controllers\ImageController;
 use App\Http\Controllers\SectorController;
 use App\Http\Controllers\UserController;
@@ -37,7 +38,9 @@ Route::prefix('auth')->group(function () {
 });
 
 Route::get('examples', [ExampleController::class, 'index']);
+Route::get('examples/trending', [HomeController::class, 'trending']);
 Route::get('sectors', [SectorController::class, 'index']);
+Route::get('stats', [HomeController::class, 'stats']);
 
 // ----- Cần đăng nhập -----
 // auth:api = JWT hợp lệ; token.version = chưa bị thu hồi do đổi mật khẩu
@@ -54,6 +57,7 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
         Route::patch('/', [UserController::class, 'updateMe']);
         Route::get('examples', [ExampleController::class, 'mine']);
         Route::get('favorites', [ExampleController::class, 'favorites']);
+        Route::get('attempts', [AttemptController::class, 'mine']);
     });
     Route::get('users', [UserController::class, 'index']); // ?ids=1,2,3
     Route::get('users/{user:slug}', [UserController::class, 'show']);
@@ -69,6 +73,7 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
     // Lượt làm bài + bảng xếp hạng của 1 đề
     Route::get('examples/{example:slug}/leaderboard', [AttemptController::class, 'index']);
     Route::post('examples/{example:slug}/attempts', [AttemptController::class, 'store']);
+    Route::get('attempts/{attempt:ulid}', [AttemptController::class, 'show']);
 
     // Nhập đề từ EduQuiz (admin)
     Route::get('eduquiz-exams/{tag}', [ExampleController::class, 'importFromEduquiz']);

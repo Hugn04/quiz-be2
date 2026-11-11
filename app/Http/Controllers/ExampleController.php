@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ExampleRequest;
 use App\Models\Example;
 use App\Models\Sector;
+use App\Services\CloudinaryImages;
 use App\Services\ExampleContent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -12,8 +13,10 @@ use Illuminate\Support\Facades\Http;
 
 class ExampleController extends Controller
 {
-    public function __construct(private ExampleContent $content)
-    {
+    public function __construct(
+        private ExampleContent $content,
+        private CloudinaryImages $images,
+    ) {
     }
 
     /** GET /examples — danh sách đề (công khai), lọc + phân trang qua query string. */
@@ -96,6 +99,7 @@ class ExampleController extends Controller
             ]);
             // Chỉ đổi ảnh khi client gửi trường `image` (bản cũ luôn ghi đè → mất ảnh).
             if (array_key_exists('image', $data)) {
+                $this->images->replaced($example->image, $data['image']);
                 $example->image = $data['image'];
             }
             $example->save();
@@ -112,12 +116,14 @@ class ExampleController extends Controller
             return response()->json('Bạn không có quyền xóa đề này', 403);
         }
 
-        $publicId = $example->image ? pathinfo(basename($example->image), PATHINFO_FILENAME) : null;
-        if ($publicId) {
-            cloudinary()->destroy('img_quiz/' . $publicId);
-        }
-        // Phần / câu hỏi / đáp án / media xóa theo khóa ngoại (cascade).
-        $example->delete();
+        DB::transaction(function () use ($example) {
+            $media = $this->content->mediaUrls($example);
+            // Phần / câu hỏi / đáp án / media xóa theo khóa ngoại (cascade).
+            $example->delete();
+            foreach ([$example->image, ...$media] as $url) {
+                $this->images->delete($url);
+            }
+        });
 
         return response()->noContent();
     }

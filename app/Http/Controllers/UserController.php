@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\CloudinaryImages;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
 {
@@ -23,7 +25,7 @@ class UserController extends Controller
      * PATCH /users/me — sửa thông tin của tôi.
      * Chỉ cho sửa các trường an toàn (bản cũ update nguyên body → có thể tự đổi role).
      */
-    public function updateMe(Request $request)
+    public function updateMe(Request $request, CloudinaryImages $images)
     {
         $data = $request->validate([
             'name' => 'sometimes|string|max:255',
@@ -32,7 +34,14 @@ class UserController extends Controller
         ]);
 
         $user = auth()->user();
-        $user->forceFill($data)->save();
+        DB::transaction(function () use ($user, $data, $images) {
+            foreach (['avatar', 'banner'] as $field) {
+                if (array_key_exists($field, $data)) {
+                    $images->replaced($user->{$field}, $data[$field]);
+                }
+            }
+            $user->forceFill($data)->save();
+        });
 
         return response()->json($user->fresh());
     }
