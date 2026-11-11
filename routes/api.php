@@ -1,9 +1,9 @@
 <?php
 
+use App\Http\Controllers\AttemptController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ExampleController;
 use App\Http\Controllers\ImageController;
-use App\Http\Controllers\ScoreController;
 use App\Http\Controllers\SectorController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
@@ -66,9 +66,9 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
     Route::put('examples/{example:slug}/like', [ExampleController::class, 'like']);
     Route::put('examples/{example:slug}/favorite', [ExampleController::class, 'favorite']);
 
-    // Điểm / bảng xếp hạng của 1 đề
-    Route::get('examples/{example:slug}/scores', [ScoreController::class, 'index']);
-    Route::post('examples/{example:slug}/scores', [ScoreController::class, 'store']);
+    // Lượt làm bài + bảng xếp hạng của 1 đề
+    Route::get('examples/{example:slug}/leaderboard', [AttemptController::class, 'index']);
+    Route::post('examples/{example:slug}/attempts', [AttemptController::class, 'store']);
 
     // Nhập đề từ EduQuiz (admin)
     Route::get('eduquiz-exams/{tag}', [ExampleController::class, 'importFromEduquiz']);

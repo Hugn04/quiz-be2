@@ -2,19 +2,24 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\ExampleRequest;
 use App\Models\Example;
 use App\Models\Sector;
-use App\Models\UserAction;
+use App\Services\ExampleContent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class ExampleController extends Controller
 {
+    public function __construct(private ExampleContent $content)
+    {
+    }
+
     /** GET /examples — danh sách đề (công khai), lọc + phân trang qua query string. */
     public function index(Request $request)
     {
-        $perPage = $request->query('per_page', 9);
+        $perPage = $request->query('per_page', 15);
         $result = Example::filter($request->all())->withAll()->paginate($perPage);
 
         return response()->json($result);
@@ -23,7 +28,7 @@ class ExampleController extends Controller
     /** GET /users/me/examples — đề do tôi tạo. */
     public function mine(Request $request)
     {
-        $perPage = $request->query('per_page', 9);
+        $perPage = $request->query('per_page', 15);
         $examples = Example::where('user_id', auth()->id())
             ->filter($request->all())
             ->withAll()
@@ -35,78 +40,69 @@ class ExampleController extends Controller
     /** GET /users/me/favorites — đề tôi đã đánh dấu yêu thích. */
     public function favorites(Request $request)
     {
-        $perPage = $request->query('per_page', 9);
+        $perPage = $request->query('per_page', 15);
         $examples = Example::filter($request->all())->myFavorite()->paginate($perPage);
 
         return response()->json($examples);
     }
 
     /**
-     * GET /examples/{example} — chi tiết đề kèm bộ câu hỏi.
-     * (Gộp getQuestion + getMyQuestion cũ; quyền sửa được kiểm tra ở PUT.)
+     * GET /examples/{example} — chi tiết đề kèm nội dung (phần → câu hỏi → đáp án).
+     * Quyền sửa được kiểm tra ở PUT.
      */
     public function show(Example $example)
     {
-        $data = Example::withAll()->with('question')->findOrFail($example->id)->toArray();
-        if (isset($data['question']['question'])) {
-            $data['question'] = $data['question']['question'];
-        }
-
-        return response()->json($data);
+        return response()->json($this->detail($example));
     }
 
-    /** POST /examples — tạo đề. */
-    public function store(Request $request)
+    /** POST /examples — tạo đề. `num_question` do server tự đếm. */
+    public function store(ExampleRequest $request)
     {
-        $data = $request->input();
+        $data = $request->validated();
 
         $example = DB::transaction(function () use ($data) {
-            $questionId = DB::table('questions')->insertGetId([
-                'question' => $data['question'],
-            ]);
-            $exampleId = DB::table('examples')->insertGetId([
+            $example = new Example();
+            $example->forceFill([
                 'name' => $data['name'],
-                'slug' => Example::uniqueSlug($data['name']),
                 'count_test' => 0,
                 'count_like' => 0,
-                'num_question' => $data['count_question'],
+                'num_question' => 0,
                 'credits' => $data['credits'],
                 'image' => $data['image'] ?? null,
-                'sector_id' => $this->sectorId($data['sector'] ?? null),
-                'question_id' => $questionId,
+                'sector_id' => $this->sectorId($data['sector']),
                 'user_id' => auth()->id(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            ])->save(); // slug tự sinh (HasSlug)
+            $this->content->sync($example, $data['question']);
 
-            return Example::withAll()->findOrFail($exampleId);
+            return $example;
         });
 
-        return response()->json($example, 201);
+        return response()->json($this->detail($example), 201);
     }
 
-    /** PUT /examples/{example} — sửa đề của tôi. */
-    public function update(Request $request, Example $example)
+    /** PUT /examples/{example} — sửa đề của tôi (ghi đè toàn bộ nội dung). */
+    public function update(ExampleRequest $request, Example $example)
     {
         if (!$this->isOwner($example)) {
             return response()->json('Bạn không có quyền sửa đề này', 403);
         }
+        $data = $request->validated();
 
-        $example->update([
-            'num_question' => $request->input('count_question'),
-            'name' => $request->input('name'),
-            'credits' => $request->input('credits'),
-            'image' => $request->input('image'),
-            'sector_id' => $this->sectorId($request->input('sector')),
-        ]);
-        $example->load(['user', 'question']);
-        if ($example->question) {
-            $example->question->update([
-                'question' => $request->input('question'),
+        DB::transaction(function () use ($example, $data) {
+            $example->forceFill([
+                'name' => $data['name'],
+                'credits' => $data['credits'],
+                'sector_id' => $this->sectorId($data['sector']),
             ]);
-        }
+            // Chỉ đổi ảnh khi client gửi trường `image` (bản cũ luôn ghi đè → mất ảnh).
+            if (array_key_exists('image', $data)) {
+                $example->image = $data['image'];
+            }
+            $example->save();
+            $this->content->sync($example, $data['question']);
+        });
 
-        return response()->json($example);
+        return response()->json($this->detail($example->fresh()));
     }
 
     /** DELETE /examples/{example} — xóa đề của tôi (kèm ảnh + bộ câu hỏi). */
@@ -120,26 +116,31 @@ class ExampleController extends Controller
         if ($publicId) {
             cloudinary()->destroy('img_quiz/' . $publicId);
         }
-        $questionId = $example->question_id;
+        // Phần / câu hỏi / đáp án / media xóa theo khóa ngoại (cascade).
         $example->delete();
-        DB::table('questions')->where('id', $questionId)->delete();
 
         return response()->noContent();
     }
 
-    /** PUT /examples/{example}/like — body { like: bool }. */
+    /**
+     * PUT /examples/{example}/like — body { like: bool }.
+     * Khóa chính (user_id, example_id) chống trùng; chỉ đổi bộ đếm khi thật sự thêm / xóa dòng.
+     */
     public function like(Request $request, Example $example)
     {
         $request->validate(['like' => 'required|boolean']);
         $like = $request->boolean('like');
+        $pair = ['user_id' => auth()->id(), 'example_id' => $example->id];
 
-        $action = $this->userAction($example);
-        // Chỉ đổi bộ đếm khi trạng thái thực sự thay đổi (tránh like 2 lần bị +2).
-        if ((bool) $action->like !== $like) {
-            $like ? $example->increment('count_like') : $example->decrement('count_like');
-            $action->like = $like;
-            $action->save();
-        }
+        DB::transaction(function () use ($like, $pair, $example) {
+            if ($like) {
+                if (DB::table('likes')->insertOrIgnore($pair + ['created_at' => now()])) {
+                    $example->increment('count_like');
+                }
+            } elseif (DB::table('likes')->where($pair)->delete()) {
+                $example->decrement('count_like');
+            }
+        });
 
         return response()->json([
             'count_like' => $example->fresh()->count_like,
@@ -152,10 +153,13 @@ class ExampleController extends Controller
     {
         $request->validate(['favorited' => 'required|boolean']);
         $favorited = $request->boolean('favorited');
+        $pair = ['user_id' => auth()->id(), 'example_id' => $example->id];
 
-        $action = $this->userAction($example);
-        $action->favorited = $favorited;
-        $action->save();
+        if ($favorited) {
+            DB::table('favorites')->insertOrIgnore($pair + ['created_at' => now()]);
+        } else {
+            DB::table('favorites')->where($pair)->delete();
+        }
 
         return response()->json(['favorited' => $favorited]);
     }
@@ -196,6 +200,17 @@ class ExampleController extends Controller
         }
     }
 
+    /** Chi tiết đề + nội dung theo định dạng API (`question`: danh sách phần). */
+    private function detail(Example $example): array
+    {
+        $example = Example::withAll()->with(ExampleContent::RELATIONS)->findOrFail($example->id);
+        $data = $example->toArray();
+        unset($data['parts']);
+        $data['question'] = $this->content->toArray($example);
+
+        return $data;
+    }
+
     /** Body gửi `sector` là slug ngành → đổi sang id để lưu khóa ngoại. */
     private function sectorId(?string $slug): ?int
     {
@@ -207,14 +222,6 @@ class ExampleController extends Controller
         return auth()->id() == $example->user_id;
     }
 
-    /** Bản ghi like/favorite của user hiện tại với đề (tạo mới nếu chưa có). */
-    private function userAction(Example $example): UserAction
-    {
-        return UserAction::firstOrNew(
-            ['user_id' => auth()->id(), 'example_id' => $example->id],
-            ['like' => false, 'favorited' => false],
-        );
-    }
 }
 
 //https://studio-gw.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/13995/sections?bizapp=EDUQUIZ&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true

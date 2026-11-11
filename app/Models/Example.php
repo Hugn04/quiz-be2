@@ -5,7 +5,6 @@ namespace App\Models;
 use App\Models\Concerns\HasSlug;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Log;
 
 class Example extends Model
 {
@@ -18,6 +17,10 @@ class Example extends Model
     {
         return (string) $this->name;
     }
+    protected $appends = ['user_action'];
+
+    protected $hidden = ['liked_by_me', 'favorited_by_me'];
+
     protected $fillable = [
         'name',
         'slug',
@@ -37,59 +40,76 @@ class Example extends Model
     {
         return $this->belongsTo(Sector::class, 'sector_id');
     }
-    public function userActions()
+    /** Người dùng đã thích đề (bảng `likes`). */
+    public function likers()
     {
-        return $this->hasMany(UserAction::class);
-    }
-    public function userAction()
-    {
-        return $this->hasOne(UserAction::class)
-            ->withDefault([
-                'like' => false,
-                'favorited' => false,
-                'user_id' => null,
-                'example_id' => $this->id, // nếu muốn
-            ]);
-    }
-    public function scopeMyFavorite($query, $search = null)
-    {
-        $id = auth('api')->id();
-        return $query
-            ->withAll()
-            ->whereHas('userActions', function ($q) use ($id) {
-                $q->where('user_id', $id)
-                    ->where('favorited', true);
-            })
-            ->when($search, function ($q) use ($search) {
-                $q->where('name', 'like', "%$search%");
-            });
+        return $this->belongsToMany(User::class, 'likes')->withPivot('created_at');
     }
 
-    public function scopeWithUserAction($query)
+    /** Người dùng đã yêu thích đề (bảng `favorites`). */
+    public function favoritedBy()
+    {
+        return $this->belongsToMany(User::class, 'favorites')->withPivot('created_at');
+    }
+
+    /** Các lượt làm bài. */
+    public function attempts()
+    {
+        return $this->hasMany(Attempt::class);
+    }
+
+    /** Đề tôi đã yêu thích. */
+    public function scopeMyFavorite($query)
     {
         $id = auth('api')->id();
-        return $query->with(['userAction' => function ($q) use ($id) {
-            $q->where('user_id', $id);
-        }]);
+
+        return $query
+            ->withAll()
+            ->whereHas('favoritedBy', fn ($q) => $q->where('users.id', $id));
     }
+
     public function scopeWithUser($query)
     {
         return $query->with(['user']);
     }
+
+    /**
+     * Tác giả, ngành + cờ "tôi đã thích / yêu thích" (khách: false).
+     * Trả ra API qua thuộc tính `user_action` (giữ định dạng cũ cho frontend).
+     */
     public function scopeWithAll($query)
     {
         $id = auth('api')->id();
-        return $query->with(['user', 'sector'])->with(['userAction' => function ($q) use ($id) {
-            $q->where('user_id', $id);
-        }]);
+
+        return $query->with(['user', 'sector'])->withExists([
+            'likers as liked_by_me' => fn ($q) => $q->where('users.id', $id),
+            'favoritedBy as favorited_by_me' => fn ($q) => $q->where('users.id', $id),
+        ]);
     }
+
+    /** `{ like, favorited }` của người dùng hiện tại (cần scope withAll). */
+    public function getUserActionAttribute(): array
+    {
+        return [
+            'like' => (bool) ($this->attributes['liked_by_me'] ?? false),
+            'favorited' => (bool) ($this->attributes['favorited_by_me'] ?? false),
+        ];
+    }
+
     public function scopeWithSector($query)
     {
         return $query->with(['sector']);
     }
-    public function question()
+    /** Các phần của đề, theo thứ tự hiển thị. */
+    public function parts()
     {
-        return $this->belongsTo(Question::class);
+        return $this->hasMany(Part::class)->orderBy('position');
+    }
+
+    /** Mọi câu hỏi của đề (qua các phần). */
+    public function questions()
+    {
+        return $this->hasManyThrough(Question::class, Part::class);
     }
     public function scopeFilter($query, $filters)
     {

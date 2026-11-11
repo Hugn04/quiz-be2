@@ -54,10 +54,8 @@ class UserController extends Controller
     private function profile(User $user): User
     {
         return $user->load([
-            'examples' => fn ($q) => $q->limit(4),
-            'examples.userAction' => fn ($q) => $q->where('user_id', auth()->id()),
-            'examples.user',
-            'examples.sector',
+            // withAll: tác giả, ngành + cờ đã thích / yêu thích của người xem.
+            'examples' => fn ($q) => $q->withAll()->latest()->limit(4),
         ]);
     }
 }
