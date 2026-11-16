@@ -9,7 +9,6 @@ use App\Services\CloudinaryImages;
 use App\Services\ExampleContent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 
 class ExampleController extends Controller
 {
@@ -19,11 +18,25 @@ class ExampleController extends Controller
     ) {
     }
 
+    /**
+     * GET /sitemap/examples — danh sách gọn cho sitemap.xml: đề công khai có ≥ 5 câu
+     * (bỏ đề nháp / đề rác ít câu), chỉ slug + thời điểm sửa + ảnh bìa.
+     */
+    public function sitemap()
+    {
+        return response()->json(
+            Example::visible()->where('num_question', '>=', 5)
+                ->orderByDesc('updated_at')
+                ->get(['slug', 'updated_at', 'image'])
+                ->each->setAppends([]) // bỏ user_action (tốn truy vấn, sitemap không cần)
+        );
+    }
+
     /** GET /examples — danh sách đề (công khai), lọc + phân trang qua query string. */
     public function index(Request $request)
     {
-        $perPage = $request->query('per_page', 15);
-        $result = Example::filter($request->all())->withAll()->paginate($perPage);
+        $perPage = min(max((int) $request->query('per_page', 15), 1), 100);
+        $result = Example::filter($request->all())->visible()->withAll()->paginate($perPage);
 
         return response()->json($result);
     }
@@ -55,12 +68,49 @@ class ExampleController extends Controller
      */
     public function show(Example $example)
     {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
         return response()->json($this->detail($example));
+    }
+
+    /** Số câu mẫu trả về ở trang xem trước công khai. */
+    private const PREVIEW_SAMPLE = 3;
+
+    /**
+     * GET /examples/{example}/preview — CÔNG KHAI (không cần đăng nhập), cho trang xem trước
+     * đề + SEO: thông tin đề, cấu trúc phần (tên + số câu) và vài câu hỏi mẫu.
+     * KHÔNG trả toàn bộ câu hỏi / đáp án (muốn làm bài phải đăng nhập → GET /examples/{example}).
+     * Đã đăng nhập thì có thêm trạng thái thích / yêu thích (user_action).
+     */
+    public function preview(Example $example)
+    {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
+        $example = Example::withAll()->with(ExampleContent::RELATIONS)->findOrFail($example->id);
+        $parts = $this->content->toArray($example);
+
+        $data = $example->toArray();
+        unset($data['parts']);
+        $data['parts'] = array_map(fn ($part) => [
+            'name' => $part['name'],
+            'questions_count' => count($part['questions']),
+        ], $parts);
+        $data['sample'] = array_slice(
+            array_merge(...array_map(fn ($part) => $part['questions'], $parts ?: [[]])),
+            0,
+            self::PREVIEW_SAMPLE,
+        );
+
+        return response()->json($data);
     }
 
     /** POST /examples — tạo đề. `num_question` do server tự đếm. */
     public function store(ExampleRequest $request)
     {
+        if (!auth()->user()->canCreateExams()) {
+            return response()->json([
+                'message' => 'Tài khoản của bạn đã bị hạn chế tạo đề thi.',
+                'code' => 'cannot_create_exams',
+            ], 403);
+        }
         $data = $request->validated();
 
         $example = DB::transaction(function () use ($data) {
@@ -89,22 +139,7 @@ class ExampleController extends Controller
         if (!$this->isOwner($example)) {
             return response()->json('Bạn không có quyền sửa đề này', 403);
         }
-        $data = $request->validated();
-
-        DB::transaction(function () use ($example, $data) {
-            $example->forceFill([
-                'name' => $data['name'],
-                'credits' => $data['credits'],
-                'sector_id' => $this->sectorId($data['sector']),
-            ]);
-            // Chỉ đổi ảnh khi client gửi trường `image` (bản cũ luôn ghi đè → mất ảnh).
-            if (array_key_exists('image', $data)) {
-                $this->images->replaced($example->image, $data['image']);
-                $example->image = $data['image'];
-            }
-            $example->save();
-            $this->content->sync($example, $data['question']);
-        });
+        $this->content->update($example, $request->validated());
 
         return response()->json($this->detail($example->fresh()));
     }
@@ -116,14 +151,7 @@ class ExampleController extends Controller
             return response()->json('Bạn không có quyền xóa đề này', 403);
         }
 
-        DB::transaction(function () use ($example) {
-            $media = $this->content->mediaUrls($example);
-            // Phần / câu hỏi / đáp án / media xóa theo khóa ngoại (cascade).
-            $example->delete();
-            foreach ([$example->image, ...$media] as $url) {
-                $this->images->delete($url);
-            }
-        });
+        $this->content->destroy($example);
 
         return response()->noContent();
     }
@@ -134,10 +162,13 @@ class ExampleController extends Controller
      */
     public function like(Request $request, Example $example)
     {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
         $request->validate(['like' => 'required|boolean']);
         $like = $request->boolean('like');
         $pair = ['user_id' => auth()->id(), 'example_id' => $example->id];
 
+        // Đếm lượt thích không tính là sửa đề (giữ nguyên updated_at).
+        $example->timestamps = false;
         DB::transaction(function () use ($like, $pair, $example) {
             if ($like) {
                 if (DB::table('likes')->insertOrIgnore($pair + ['created_at' => now()])) {
@@ -157,6 +188,7 @@ class ExampleController extends Controller
     /** PUT /examples/{example}/favorite — body { favorited: bool }. */
     public function favorite(Request $request, Example $example)
     {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
         $request->validate(['favorited' => 'required|boolean']);
         $favorited = $request->boolean('favorited');
         $pair = ['user_id' => auth()->id(), 'example_id' => $example->id];
@@ -170,51 +202,10 @@ class ExampleController extends Controller
         return response()->json(['favorited' => $favorited]);
     }
 
-    /** GET /eduquiz-exams/{tag}?type=EDUQUIZ — lấy đề từ EduQuiz (chỉ admin). */
-    public function importFromEduquiz(Request $request, string $tag)
-    {
-        if (auth()->user()->role != 'admin') {
-            return response()->json("Bạn không có quyền này !", 403);
-        }
-
-        $result = [];
-        try {
-            $type = $request->input('type');
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer 892475|ZdHRPg6gPE3LsJXuLeLIoTtetrwlEZkH9ZLEdxGG',
-                'Accept' => 'application/json',
-            ])->get('https://studio-api-07.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/' . $tag . '/sections?bizapp=' . $type . '&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true');
-            if (!$response->successful()) {
-                return response()->json("Không lấy được đề từ EduQuiz", 502);
-            }
-            $data = $response['data'];
-            foreach ($data as $part) {
-                $objParts = ['name' => $part['name'], 'questions' => []];
-                foreach ($part['questions'] as $question) {
-                    $objQuestion = ['name' => $question['name'], 'img' => $question['files'], 'answers' => []];
-                    foreach ($question['answers'] as $answer) {
-                        $objQuestion['answers'][] = ['option' => $answer['option'], 'is_correct' => $answer['is_correct']];
-                    }
-                    $objParts['questions'][] = $objQuestion;
-                }
-                $result[] = $objParts;
-            }
-
-            return response()->json($result);
-        } catch (\Throwable $th) {
-            return response()->json("Đề thi bị lỗi", 400);
-        }
-    }
-
     /** Chi tiết đề + nội dung theo định dạng API (`question`: danh sách phần). */
     private function detail(Example $example): array
     {
-        $example = Example::withAll()->with(ExampleContent::RELATIONS)->findOrFail($example->id);
-        $data = $example->toArray();
-        unset($data['parts']);
-        $data['question'] = $this->content->toArray($example);
-
-        return $data;
+        return $this->content->detail($example);
     }
 
     /** Body gửi `sector` là slug ngành → đổi sang id để lưu khóa ngoại. */
@@ -230,4 +221,3 @@ class ExampleController extends Controller
 
 }
 
-//https://studio-gw.eduquiz.io.vn/quiz-chanel/public/api/v1/exams/13995/sections?bizapp=EDUQUIZ&is_question_shuffle=0&is_answer_shuffle=0&allow_access_exam=true

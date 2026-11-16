@@ -19,6 +19,7 @@ class AttemptController extends Controller
      */
     public function store(Request $request, Example $example, AttemptRecorder $recorder)
     {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
         $raw = json_decode($request->getContent(), true);
         if (is_array($raw)) {
             $request->merge($raw);
@@ -48,7 +49,7 @@ class AttemptController extends Controller
     }
 
     /**
-     * GET /examples/{example}/leaderboard — top 10 (điểm cao nhất của mỗi người; cùng điểm
+     * GET /examples/{example}/leaderboard — CÔNG KHAI. Top 10 (điểm cao nhất của mỗi người; cùng điểm
      * thì ai đạt trước xếp trên) + điểm, thứ hạng, lịch sử gần đây của tôi.
      * Giữ khóa `scores` / `user_score` như API cũ.
      */
@@ -66,7 +67,7 @@ class AttemptController extends Controller
 
         $top = $best()->orderByDesc('score')->orderBy('created_at')->limit(10)->get();
         $users = User::whereIn('id', $top->pluck('user_id'))
-            ->get(['id', 'slug', 'name', 'avatar', 'email', 'role'])
+            ->get(['id', 'uuid', 'name', 'avatar', 'role']) // công khai → không kèm email
             ->keyBy('id');
 
         $scores = $top->values()->map(fn ($row, $i) => [
@@ -79,9 +80,17 @@ class AttemptController extends Controller
             'user' => $users[$row->user_id] ?? null,
         ]);
 
-        $me = auth()->user();
+        // Công khai: khách xem được top 10; điểm / lịch sử của tôi chỉ khi đã đăng nhập.
+        $me = auth('api')->user();
+        if (!$me) {
+            return response()->json([
+                'scores' => $scores,
+                'user_score' => null,
+                'my_attempts' => [],
+            ]);
+        }
         $mine = $best()->where('user_id', $me->id)->first();
-        $userScore = ['user' => $me->only(['id', 'slug', 'name', 'avatar', 'role'])];
+        $userScore = ['user' => $me->only(['id', 'uuid', 'name', 'avatar', 'role'])];
         if ($mine) {
             $better = DB::query()
                 ->fromSub($best(), 'b')

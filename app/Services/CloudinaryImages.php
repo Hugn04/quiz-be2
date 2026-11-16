@@ -90,8 +90,19 @@ class CloudinaryImages
 
     private function stillUsed(string $url): bool
     {
+        // Logo / ảnh mặc định trong cấu hình giao diện (JSON).
+        if (DB::table('settings')->where('value', 'like', '%' . addcslashes(json_encode($url, JSON_UNESCAPED_SLASHES), '%_') . '%')->exists()) {
+            return true;
+        }
         foreach (self::REFERENCES as [$table, $column]) {
             if (DB::table($table)->where($column, $url)->exists()) {
+                return true;
+            }
+        }
+        // Ảnh nhúng <img> trong nội dung câu hỏi / giải thích / đáp án (images:localize, lấy đề).
+        $like = '%' . addcslashes($url, '%_\\') . '%';
+        foreach ([['questions', 'content'], ['questions', 'explanation'], ['answers', 'content']] as [$table, $column]) {
+            if (DB::table($table)->where($column, 'like', $like)->exists()) {
                 return true;
             }
         }

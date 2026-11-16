@@ -19,6 +19,11 @@ class Example extends Model
     }
     protected $appends = ['user_action'];
 
+    protected $casts = [
+        'hidden_at' => 'datetime',
+        'pinned_at' => 'datetime',
+    ];
+
     protected $hidden = ['liked_by_me', 'favorited_by_me'];
 
     protected $fillable = [
@@ -33,8 +38,9 @@ class Example extends Model
     ];
     public function user()
     {
+        // Tác giả hiện công khai (danh sách đề, trang xem trước) → KHÔNG kèm email.
         return $this->belongsTo(User::class, 'user_id')
-            ->select(["id", "slug", "name", "email", "avatar", "role"]);
+            ->select(["id", "uuid", "name", "avatar", "role"]);
     }
     public function sector()
     {
@@ -59,13 +65,38 @@ class Example extends Model
     }
 
     /** Đề tôi đã yêu thích. */
+    /** Chỉ đề đang công khai (chưa bị ẩn). */
+    public function scopeVisible($query)
+    {
+        return $query->whereNull('examples.hidden_at');
+    }
+
+    public function isHidden(): bool
+    {
+        return $this->hidden_at !== null;
+    }
+
+    /**
+     * Người hiện tại xem được đề này không: đề công khai → ai cũng xem;
+     * đề bị ẩn → chỉ tác giả và administrator / manager.
+     */
+    public function viewableBy(?User $user): bool
+    {
+        if (!$this->isHidden()) {
+            return true;
+        }
+
+        return $user && ($user->id === $this->user_id || $user->isStaff());
+    }
+
     public function scopeMyFavorite($query)
     {
         $id = auth('api')->id();
 
         return $query
             ->withAll()
-            ->whereHas('favoritedBy', fn ($q) => $q->where('users.id', $id));
+            ->whereHas('favoritedBy', fn ($q) => $q->where('users.id', $id))
+            ->visible();
     }
 
     public function scopeWithUser($query)

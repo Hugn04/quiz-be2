@@ -24,6 +24,7 @@ class HomeController extends Controller
         $counts = Attempt::query()
             ->where('created_at', '>=', $since)
             ->whereNotNull('example_id')
+            ->whereIn('example_id', Example::visible()->select('id'))
             ->groupBy('example_id')
             ->select('example_id', DB::raw('COUNT(*) as month_attempts'))
             ->orderByDesc('month_attempts')
@@ -31,18 +32,27 @@ class HomeController extends Controller
             ->limit($limit)
             ->pluck('month_attempts', 'example_id');
 
+        // Đề được ghim (quản trị) luôn đứng đầu.
+        $pinned = Example::visible()->whereNotNull('pinned_at')->withAll()
+            ->orderByDesc('pinned_at')->limit($limit)->get();
+        $monthCounts = $counts; // giữ số lượt tháng này của cả đề ghim để hiển thị
+        $counts = $counts->except($pinned->pluck('id')->all());
+
         $trending = Example::whereIn('id', $counts->keys())->withAll()->get()
             ->sortBy(fn (Example $e) => [-$counts[$e->id], -$e->count_test])
             ->values();
 
+        $trending = $pinned->concat($trending)->take($limit)->values();
+
         $fill = $trending->count() < $limit
-            ? Example::whereNotIn('id', $counts->keys())->withAll()
+            ? Example::visible()->whereNotIn('id', $trending->pluck('id')->merge($counts->keys()))->withAll()
                 ->orderByDesc('count_test')->orderByDesc('id')
                 ->limit($limit - $trending->count())->get()
             : collect();
 
-        $data = $trending->concat($fill)->map(function (Example $e) use ($counts) {
-            $e->setAttribute('month_attempts', (int) ($counts[$e->id] ?? 0));
+        $data = $trending->concat($fill)->map(function (Example $e) use ($monthCounts) {
+            $e->setAttribute('month_attempts', (int) ($monthCounts[$e->id] ?? 0));
+            $e->setAttribute('pinned', $e->pinned_at !== null);
 
             return $e;
         });
@@ -57,7 +67,7 @@ class HomeController extends Controller
     public function stats()
     {
         return response()->json([
-            'examples' => Example::count(),
+            'examples' => Example::visible()->count(),
             'questions' => DB::table('questions')->count(),
             'attempts' => Attempt::count(),
             'users' => DB::table('users')->count(),

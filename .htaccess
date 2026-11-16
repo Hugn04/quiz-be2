@@ -5,6 +5,11 @@
 
     RewriteEngine On
 
+    # Block access to source code and secrets (project root is the web root)
+    RewriteRule ^(app|bootstrap|config|database|resources|routes|storage|tests|vendor)(/|$) - [R=404,L]
+    RewriteRule (^|/)\.(?!well-known/) - [R=404,L]
+    RewriteRule ^(artisan|composer\.(json|lock)|package\.json|phpunit\.xml|vite\.config\.js)$ - [R=404,L]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

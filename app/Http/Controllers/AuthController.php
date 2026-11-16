@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Mail\OTPVerify;
 use App\Mail\ForgotPassword;
 use App\Models\User;
+use App\Support\AuthCookie;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Cookie;
@@ -21,30 +22,53 @@ class AuthController extends Controller
     /**
      * Trả JWT trong cookie HttpOnly `token` (middleware CheckToken đổi thành Bearer).
      * Cookie sống bằng hạn refresh để client còn gọi được /auth/refresh khi access token hết hạn.
+     * Thuộc tính cookie: xem App\Support\AuthCookie.
      */
     private function respondWithToken(string $token, User $user, int $status = 200)
     {
+        // Role administrator luôn khớp ADMINISTRATOR_EMAIL (đăng nhập / refresh là đồng bộ lại).
+        $user->syncAdministratorRole();
         return response()
             ->json([
                 'user' => $user,
                 'token_type' => 'bearer',
                 'expires_in' => auth('api')->factory()->getTTL() * 60,
             ], $status)
-            ->cookie('token', $token, (int) config('jwt.refresh_ttl'), '/');
+            ->withCookie(AuthCookie::make($token));
+    }
+
+    /** Phản hồi 403 cho tài khoản bị khóa (đăng nhập / refresh). */
+    private function bannedResponse(User $user)
+    {
+        return response()->json([
+            'message' => 'Tài khoản của bạn đã bị khóa' . ($user->ban_reason ? ': ' . $user->ban_reason : '.'),
+            'code' => 'banned',
+        ], 403);
     }
 
     /** POST /auth/login */
     public function login(Request $request)
     {
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'password' => ['required', 'string', 'max:255'],
+        ]);
         $token = auth('api')->attempt([
-            'email' => $request->input('email'),
-            'password' => $request->input('password'),
+            'email' => $data['email'],
+            'password' => $data['password'],
         ]);
         if (!$token) {
             return response()->json(['message' => "Tên tài khoản hoặc mật khẩu không chính xác"], 401);
         }
 
-        return $this->respondWithToken($token, auth('api')->user());
+        $user = auth('api')->user();
+        if ($user->isBanned()) {
+            auth('api')->setToken($token)->invalidate();
+
+            return $this->bannedResponse($user);
+        }
+
+        return $this->respondWithToken($token, $user);
     }
 
     /**
@@ -58,14 +82,20 @@ class AuthController extends Controller
             $guard = auth('api')->setToken($token);
             $user = $guard->user();
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401)
-                ->withoutCookie('token');
+            // KHÔNG xóa cookie: lỗi này thường do token gửi lên đã được refresh ở nơi khác
+            // (tab khác / SSR / request song song) → trình duyệt có thể đang giữ token MỚI hợp lệ,
+            // xóa cookie sẽ đá người dùng ra. Hết phiên thật thì client tự về trang đăng nhập.
+            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401);
+        }
+        if ($user && $user->isBanned()) {
+            $guard->invalidate();
+
+            return $this->bannedResponse($user);
         }
         // Token phát hành trước lần đổi mật khẩu gần nhất → không cho làm mới.
         if (!$user || (int) $guard->payload()->get('ver') !== (int) $user->token_version) {
             $guard->invalidate();
-            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401)
-                ->withoutCookie('token');
+            return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401);
         }
 
         return $this->respondWithToken($token, $user);
@@ -102,6 +132,10 @@ class AuthController extends Controller
                 'email_verified_at' => now(),
             ]
         );
+
+        if ($user->isBanned()) {
+            return $this->bannedResponse($user);
+        }
 
         return $this->respondWithToken(auth('api')->login($user), $user);
     }
@@ -148,7 +182,7 @@ class AuthController extends Controller
     /** POST /auth/register/otp — gửi OTP xác nhận email đăng ký. */
     public function sendRegisterOtp(Request $request)
     {
-        $data = $request->input();
+        $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
         $email = $data['email'];
         $user = User::where('email', $email)->first();
         if ($user && $user->password) {
@@ -156,6 +190,7 @@ class AuthController extends Controller
         } else {
             $otp = $this->generateOTP();
             Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
+            Cache::put('otp_' . $email . '_attempts', 0, now()->addMinutes(5));
             Mail::to($email)->send(new OTPVerify($otp));
             return response()->json("Đã gửi email tới " . $email . ". Vui lòng kiểm tra email!");
         }
@@ -163,7 +198,12 @@ class AuthController extends Controller
     /** POST /auth/register — xác nhận OTP + tạo tài khoản. */
     public function register(Request $request)
     {
-        $data = $request->input();
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'otp' => ['required', 'string', 'size:6'],
+            'name' => ['required', 'string', 'max:255'],
+            'password' => ['required', 'string', 'min:6', 'max:255'],
+        ]);
         $email = $data['email'];
         $otp = $data['otp'];
 
@@ -196,12 +236,13 @@ class AuthController extends Controller
     /** POST /auth/password/reset/otp — gửi OTP quên mật khẩu. */
     public function sendResetPasswordOtp(Request $request)
     {
-        $data = $request->input();
+        $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
         $email = $data['email'];
         $account = DB::table("users")->where("email", $email)->get();
         if ($account->count()) {
             $otp = $this->generateOTP();
             Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
+            Cache::put('otp_' . $email . '_attempts', 0, now()->addMinutes(5));
             Mail::to($data['email'])->send(new OTPVerify($otp));
             return response()->json("");
         } else {
@@ -211,7 +252,10 @@ class AuthController extends Controller
     /** POST /auth/password/reset — xác nhận OTP, đặt mật khẩu ngẫu nhiên và gửi qua email. */
     public function resetPassword(Request $request)
     {
-        $data = $request->input();
+        $data = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'otp' => ['required', 'string', 'size:6'],
+        ]);
         $email = $data['email'];
         $otp = $data['otp'];
         $dataOTP = $this->verifyOTP($email, $otp);
@@ -247,7 +291,7 @@ class AuthController extends Controller
                 $user->increment('token_version');
                 auth('api')->invalidate();
                 return response()->json('Đổi mật khẩu thành công. Vui lòng đăng nhập lại !')
-                    ->withoutCookie('token');
+                    ->withCookie(AuthCookie::forget());
             } else {
                 return response()->json('Bạn nhập lại mật khẩu cũ bị sai !', 422);
             }
@@ -255,15 +299,27 @@ class AuthController extends Controller
             return response()->json("Bạn chưa nhập đủ mật khẩu", 422);
         }
     }
+    /** Tối đa số lần nhập sai cho 1 mã OTP (chống dò 6 chữ số). */
+    private const OTP_MAX_ATTEMPTS = 5;
+
     private function verifyOTP($email, $otp)
     {
-        $cachedOtp = Cache::get('otp_' . $email);
+        $key = 'otp_' . $email;
+        $cachedOtp = Cache::get($key);
         if (!$cachedOtp) {
             return response()->json('OTP đã hết hạn', 410);
         }
-        if ($otp === $cachedOtp) {
-            Cache::pull('otp_' . $email);
+        if (hash_equals((string) $cachedOtp, (string) $otp)) {
+            Cache::forget($key);
+            Cache::forget($key . '_attempts');
             return true;
+        }
+        $attempts = Cache::increment($key . '_attempts');
+        if ($attempts >= self::OTP_MAX_ATTEMPTS) {
+            // Sai quá nhiều → hủy mã, phải gửi lại OTP mới.
+            Cache::forget($key);
+            Cache::forget($key . '_attempts');
+            return response()->json('Nhập sai OTP quá nhiều lần, vui lòng gửi lại mã mới.', 410);
         }
         return response()->json('OTP không hợp lệ vui lòng nhập lại !', 422);
     }
@@ -284,7 +340,7 @@ class AuthController extends Controller
     {
         $otp = '';
         for ($i = 0; $i < $length; $i++) {
-            $otp .= mt_rand(0, 9);
+            $otp .= random_int(0, 9);
         }
         return $otp;
     }
@@ -298,6 +354,6 @@ class AuthController extends Controller
     {
         auth('api')->logout(); // đưa token hiện tại vào blacklist
 
-        return response()->json("Đăng xuất thành công")->withoutCookie('token');
+        return response()->json("Đăng xuất thành công")->withCookie(AuthCookie::forget());
     }
 }

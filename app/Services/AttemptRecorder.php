@@ -83,7 +83,10 @@ class AttemptRecorder
         }
 
         return DB::transaction(function () use ($example, $userId, $data, $summary, $rows) {
+            // Không chạm updated_at: chỉ sửa nội dung đề mới tính là "cập nhật" (lastmod sitemap).
+            $example->timestamps = false;
             $example->increment('count_test');
+            $example->timestamps = true;
 
             $attempt = Attempt::create([
                 ...$summary,

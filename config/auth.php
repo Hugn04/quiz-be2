@@ -118,4 +118,19 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+
+    /*
+    | Cookie JWT `token` (xem App\Support\AuthCookie).
+    */
+    'cookie' => [
+        'domain' => env('AUTH_COOKIE_DOMAIN'),
+        'same_site' => env('AUTH_COOKIE_SAMESITE', 'lax'),
+        'secure' => env('AUTH_COOKIE_SECURE'),
+    ],
+
+    /*
+    | Email của tài khoản administrator DUY NHẤT (xem App\Models\User). Để trống = không đồng bộ.
+    */
+    'administrator_email' => env('ADMINISTRATOR_EMAIL'),
+
 ];

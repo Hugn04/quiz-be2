@@ -2,35 +2,30 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
+/**
+ * Chỉ cho các role liệt kê đi qua, vd `checkRole:administrator,manager`.
+ * Đọc role từ DB (user của token) → đổi / thu hồi role có hiệu lực ngay, không cần đăng nhập lại.
+ */
 class CheckRole
 {
-    /**
-     * Handle an incoming request.
-     *
-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
-     */
-    public function handle(Request $request, Closure $next, ...$roles): Response
+    public function handle(Request $request, Closure $next, string ...$roles): Response
     {
-
-        // return $role;
-        if (auth()->user()->role == "ban") {
-            return response()->json([
-                'message' => 'Tài khoản của bạn đã bị khóa',
-            ], 403);
+        $user = auth('api')->user();
+        if (!$user) {
+            return response()->json(['message' => 'Bạn chưa đăng nhập'], 401);
+        }
+        if ($user->role === User::ROLE_BAN) {
+            return response()->json(['message' => 'Tài khoản của bạn đã bị khóa'], 403);
+        }
+        if (!in_array($user->role, $roles, true)) {
+            return response()->json(['message' => 'Bạn không có quyền truy cập chức năng này'], 403);
         }
 
-
-
-        if (!auth()->check() || !in_array(auth()->user()->role, $roles)) {
-            return response()->json([
-                'message' => 'Unauthorized',
-            ], 403);
-        }
         return $next($request);
     }
 }

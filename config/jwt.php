@@ -223,7 +223,10 @@ return [
     |
     */
 
-    'blacklist_grace_period' => env('JWT_BLACKLIST_GRACE_PERIOD', 0),
+    // Mặc định 30s (KHÔNG để 0): refresh đưa token cũ vào blacklist, các request đang bay /
+    // tab khác / SSR refresh cùng lúc vẫn dùng token cũ → grace 0 làm người dùng bị out ngay
+    // sau khi refresh. Production thiếu biến env thì vẫn an toàn.
+    'blacklist_grace_period' => (int) env('JWT_BLACKLIST_GRACE_PERIOD', 30),
 
     /*
     |--------------------------------------------------------------------------

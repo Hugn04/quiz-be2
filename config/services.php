@@ -28,6 +28,12 @@ return [
         'key' => env('RESEND_KEY'),
     ],
 
+    // Lấy đề từ EduQuiz (chỉ administrator, trang quản trị → Lấy đề).
+    'eduquiz' => [
+        'url' => env('EDUQUIZ_API_URL', 'https://studio-api-07.eduquiz.io.vn/quiz-chanel/public/api/v1'),
+        'token' => env('EDUQUIZ_TOKEN'),
+    ],
+
     'google' => [
         // Phải trùng NEXT_PUBLIC_GOOGLE_CLIENT_ID của frontend (kiểm tra `aud` của token).
         'client_id' => env('GOOGLE_CLIENT_ID'),

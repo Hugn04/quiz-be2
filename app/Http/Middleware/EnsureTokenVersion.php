@@ -17,11 +17,21 @@ class EnsureTokenVersion
     {
         $guard = auth('api');
         $user = $guard->user();
+        // Tài khoản bị khóa: chặn ngay (kể cả token còn hạn).
+        if ($user && $user->isBanned()) {
+            return response()->json([
+                'message' => 'Tài khoản của bạn đã bị khóa' . ($user->ban_reason ? ': ' . $user->ban_reason : '.'),
+                'code' => 'banned',
+            ], 403);
+        }
         if ($user && (int) $guard->payload()->get('ver') !== (int) $user->token_version) {
             $guard->invalidate();
 
             return response()->json(['message' => 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'], 401);
         }
+
+        // Ghi nhận đang online (last_seen_at, tối đa 1 lần / phút).
+        $user?->touchLastSeen();
 
         return $next($request);
     }

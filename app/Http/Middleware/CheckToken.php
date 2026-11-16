@@ -9,22 +9,16 @@ use Symfony\Component\HttpFoundation\Response;
 class CheckToken
 {
     /**
-     * Handle an incoming request.
-     *
-     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     * JWT nằm trong cookie HttpOnly `token` → chuyển thành header Bearer cho guard `api`.
+     * Request đã tự gửi Authorization (app khác / script) thì giữ nguyên.
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if ($request->cookie('token')) {
-            $request->headers->set('Authorization', 'Bearer ' . $request->cookie('token'));
+        $token = $request->cookie('token');
+        if ($token && !$request->bearerToken()) {
+            $request->headers->set('Authorization', 'Bearer ' . $token);
         }
-        $response = $next($request);
-        // echo $request->cookie('token');
-        // $response->headers->set('Access-Control-Allow-Origin', '*');
-        // $response->headers->set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
-        // $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token, Origin, Authorization');
 
-
-        return $response;
+        return $next($request);
     }
 }

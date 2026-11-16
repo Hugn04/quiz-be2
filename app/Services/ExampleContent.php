@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Example;
 use App\Models\Part;
 use App\Models\Question;
+use App\Models\Sector;
 use App\QuestionTypes\QuestionTypes;
 use Illuminate\Support\Facades\DB;
 
@@ -128,5 +129,51 @@ class ExampleContent
             ->unique()
             ->values()
             ->all();
+    }
+
+    /** Chi tiết đề kèm toàn bộ nội dung (định dạng API: `question` = các phần). */
+    public function detail(Example $example): array
+    {
+        $example = Example::withAll()->with(self::RELATIONS)->findOrFail($example->id);
+        $data = $example->toArray();
+        unset($data['parts']);
+        $data['question'] = $this->toArray($example);
+
+        return $data;
+    }
+
+    /**
+     * Sửa đề (dữ liệu đã validate bằng ExampleRequest): thông tin + ghi đè nội dung.
+     * Đổi / bỏ ảnh bìa → ảnh cũ trên Cloudinary bị xóa sau khi lưu thành công.
+     * Dùng chung cho chủ đề (PUT /examples/{slug}) và quản trị (PUT /admin/examples/{slug}).
+     */
+    public function update(Example $example, array $data): void
+    {
+        DB::transaction(function () use ($example, $data) {
+            $example->forceFill([
+                'name' => $data['name'],
+                'credits' => $data['credits'],
+                'sector_id' => Sector::where('slug', $data['sector'])->value('id'),
+            ]);
+            // Chỉ đổi ảnh khi client gửi trường `image`.
+            if (array_key_exists('image', $data)) {
+                $this->images->replaced($example->image, $data['image']);
+                $example->image = $data['image'];
+            }
+            $example->save();
+            $this->sync($example, $data['question']);
+        });
+    }
+
+    /** Xóa đề + bộ câu hỏi (cascade) + ảnh bìa / ảnh câu hỏi trên Cloudinary. */
+    public function destroy(Example $example): void
+    {
+        DB::transaction(function () use ($example) {
+            $media = $this->mediaUrls($example);
+            $example->delete();
+            foreach ([$example->image, ...$media] as $url) {
+                $this->images->delete($url);
+            }
+        });
     }
 }

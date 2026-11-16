@@ -15,8 +15,12 @@ class ExampleRequest extends FormRequest
     public function authorize(): bool
     {
         $example = $this->route('example');
+        if (!$example || $example->user_id == $this->user()?->id) {
+            return true;
+        }
 
-        return !$example || $example->user_id == $this->user()?->id;
+        // Trang quản trị (/admin/examples/*): administrator / manager sửa được mọi đề.
+        return $this->is('api/admin/*') && (bool) $this->user()?->isStaff();
     }
 
     protected function failedAuthorization(): void

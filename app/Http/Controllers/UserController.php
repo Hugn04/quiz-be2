@@ -15,10 +15,27 @@ class UserController extends Controller
         return response()->json($this->profile(auth()->user()));
     }
 
-    /** GET /users/{slug} — trang cá nhân của 1 người dùng (kèm 4 đề gần nhất). */
+    /** GET /users/{uuid} — trang cá nhân của 1 người dùng (kèm 4 đề gần nhất). */
     public function show(User $user)
     {
         return response()->json($this->profile($user));
+    }
+
+    /**
+     * GET /users/{user}/card — CÔNG KHAI, chỉ tên + avatar + vai trò: dùng cho thẻ chia sẻ
+     * (Facebook / Zalo không đăng nhập nên không gọi được API hồ sơ đầy đủ).
+     */
+    public function card(User $user)
+    {
+        abort_if($user->isBanned(), 404);
+
+        return response()->json([
+            'uuid' => $user->uuid,
+            'name' => $user->name,
+            'avatar' => $user->avatar,
+            'role' => $user->role,
+            'examples_count' => $user->examples()->visible()->count(),
+        ]);
     }
 
     /**

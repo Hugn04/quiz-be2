@@ -10,7 +10,16 @@ class Sector extends Model
 {
     use HasFactory, HasSlug;
 
-    protected $fillable = ['id', 'slug', 'name'];
+    protected $fillable = ['id', 'slug', 'name', 'position'];
+
+    public $timestamps = false;
+
+    protected $casts = ['position' => 'integer'];
+
+    public function examples()
+    {
+        return $this->hasMany(Example::class);
+    }
 
     public function slugSource(): string
     {

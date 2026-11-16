@@ -19,7 +19,15 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    /*
+     * Chỉ tên miền frontend (FRONTEND_URLS, phân tách bằng dấu phẩy). Frontend thường gọi
+     * API qua proxy cùng tên miền (Next rewrites) nên không cần CORS; danh sách này chỉ cho
+     * trường hợp gọi thẳng từ trình duyệt. '*' + credentials = trang bất kỳ gọi API kèm cookie.
+     */
+    'allowed_origins' => array_values(array_filter(array_map(
+        fn ($origin) => rtrim(trim($origin), '/'),
+        explode(',', (string) env('FRONTEND_URLS', 'http://localhost:5173,http://127.0.0.1:5173')),
+    ))),
 
     'allowed_origins_patterns' => [],
 

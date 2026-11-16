@@ -9,6 +9,6 @@ class SectorController extends Controller
     /** GET /sectors — danh sách ngành (công khai). */
     public function index()
     {
-        return response()->json(Sector::get());
+        return response()->json(Sector::orderBy('position')->orderBy('name')->get(['id', 'slug', 'name', 'position']));
     }
 }
