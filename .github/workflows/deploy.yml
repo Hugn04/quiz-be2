@@ -39,6 +39,7 @@ jobs:
             **/.git*/**
             **/.github/**
             **/vendor/**
+            **/public/favicon.ico
             **/node_modules/**
             **/tests/**
             **/.env
