@@ -110,6 +110,8 @@ class BrokenImages
                 $query = DB::table($table)->whereIn($column, $urls);
                 $changed += $deleteRow ? $query->delete() : $query->update([$column => null]);
             }
+            // Ảnh trong nội dung đề đổi → làm mới cache nội dung đề.
+            DB::afterCommit(fn () => \App\Services\ExampleContent::bumpAll());
 
             return $changed;
         });

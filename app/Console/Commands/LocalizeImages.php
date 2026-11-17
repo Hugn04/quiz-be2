@@ -88,6 +88,9 @@ class LocalizeImages extends Command
             return self::SUCCESS;
         }
 
+        // Link ảnh trong nội dung đề đã đổi → làm mới cache nội dung đề.
+        \App\Services\ExampleContent::bumpAll();
+
         $s = $localizer->stats;
         $this->newLine();
         $this->table(['Upload mới', 'Đã có sẵn', 'Giữ link gốc (nặng / lỗi)', 'Ảnh chết đã gỡ', 'Sửa dòng'], [[

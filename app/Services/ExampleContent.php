@@ -7,6 +7,7 @@ use App\Models\Part;
 use App\Models\Question;
 use App\Models\Sector;
 use App\QuestionTypes\QuestionTypes;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -17,11 +18,43 @@ use Illuminate\Support\Facades\DB;
  *                               img: [{ url }], answers: [{ id, option, is_correct, meta }] }] }]
  *
  * Giữ tên trường `name` / `option` / `img` như bản JSON cũ để frontend không phải đổi.
+ *
+ * Nội dung đề được CACHE (đọc rất nhiều — mở đề, xem trước, chấm bài — nhưng hiếm khi sửa).
+ * Khoá cache gồm phiên bản riêng của đề (tăng sau khi sync / destroy commit) và phiên bản
+ * chung (tăng khi công cụ quản trị sửa hàng loạt ảnh / nội dung — bumpAll()). Tăng phiên bản
+ * thay vì xoá khoá → request nào lỡ đọc dữ liệu cũ giữa chừng cũng chỉ ghi vào khoá cũ.
  */
 class ExampleContent
 {
-    /** Quan hệ cần eager load trước khi gọi toArray(). */
+    /** Quan hệ cần eager load để dựng nội dung đề. */
     public const RELATIONS = ['parts.questions.answers', 'parts.questions.media'];
+
+    /** Giữ nội dung đề trong cache bao lâu (giây) — hết hạn chỉ để dọn rác, sửa đề đã tự làm mới. */
+    private const CACHE_TTL = 7 * 24 * 3600;
+
+    /** Bản đã đọc trong request hiện tại (vd nộp bài: đếm câu + chấm điểm dùng chung 1 lần đọc). */
+    private array $memo = [];
+
+    /** Công cụ sửa hàng loạt (images:localize, xoá ảnh hỏng...) → làm mới cache MỌI đề. */
+    public static function bumpAll(): void
+    {
+        Cache::forever('exam_content:gv', (int) Cache::get('exam_content:gv', 0) + 1);
+    }
+
+    /** Làm mới cache 1 đề (sau khi transaction hiện tại commit, nếu có). */
+    public function forget(Example $example): void
+    {
+        $id = $example->id;
+        DB::afterCommit(function () use ($id) {
+            Cache::forever("exam_content:v:$id", (int) Cache::get("exam_content:v:$id", 0) + 1);
+            $this->memo = [];
+        });
+    }
+
+    private function cacheKey(int $id): string
+    {
+        return sprintf('exam_content:%d:%d:%d', (int) Cache::get('exam_content:gv', 0), $id, (int) Cache::get("exam_content:v:$id", 0));
+    }
 
     public function __construct(private CloudinaryImages $images)
     {
@@ -82,6 +115,7 @@ class ExampleContent
             }
 
             $example->forceFill(['num_question' => $total])->save();
+            $this->forget($example);
 
             // Ảnh câu hỏi không còn dùng trong nội dung mới → xóa trên Cloudinary (sau commit).
             foreach ($oldMedia as $url) {
@@ -92,10 +126,19 @@ class ExampleContent
         });
     }
 
-    /** Nội dung đề theo định dạng API (cần load RELATIONS trước). */
+    /** Nội dung đề theo định dạng API (qua cache; xem đầu class). */
     public function toArray(Example $example): array
     {
-        $example->loadMissing(self::RELATIONS);
+        $key = $this->cacheKey($example->id);
+
+        return $this->memo[$key] ??= Cache::remember($key, self::CACHE_TTL, fn () => $this->build($example));
+    }
+
+    /** Dựng nội dung đề từ database (không cache). */
+    private function build(Example $example): array
+    {
+        // Luôn đọc mới từ DB (không dùng quan hệ đã load sẵn trên model truyền vào — có thể cũ).
+        $example = Example::with(self::RELATIONS)->findOrFail($example->id);
 
         return $example->parts->map(fn (Part $part) => [
             'id' => $part->id,
@@ -134,7 +177,7 @@ class ExampleContent
     /** Chi tiết đề kèm toàn bộ nội dung (định dạng API: `question` = các phần). */
     public function detail(Example $example): array
     {
-        $example = Example::withAll()->with(self::RELATIONS)->findOrFail($example->id);
+        $example = Example::withAll()->findOrFail($example->id);
         $data = $example->toArray();
         unset($data['parts']);
         $data['question'] = $this->toArray($example);
@@ -171,6 +214,7 @@ class ExampleContent
         DB::transaction(function () use ($example) {
             $media = $this->mediaUrls($example);
             $example->delete();
+            $this->forget($example);
             foreach ([$example->image, ...$media] as $url) {
                 $this->images->delete($url);
             }

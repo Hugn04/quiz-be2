@@ -110,7 +110,7 @@ class ExampleController extends Controller
     public function preview(Example $example)
     {
         abort_unless($example->viewableBy(auth('api')->user()), 404);
-        $example = Example::withAll()->with(ExampleContent::RELATIONS)->findOrFail($example->id);
+        $example = Example::withAll()->findOrFail($example->id);
         $parts = $this->content->toArray($example);
 
         $data = $example->toArray();
