@@ -6,6 +6,7 @@ use App\Models\Attempt;
 use App\Models\Example;
 use App\Models\User;
 use App\Services\AttemptRecorder;
+use App\Services\AttemptToken;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -14,8 +15,13 @@ class AttemptController extends Controller
     /**
      * POST /examples/{example}/attempts — nộp 1 lượt làm bài.
      * Frontend có thể gửi bằng navigator.sendBeacon (body JSON dạng text) khi rời trang.
-     * Lượt chưa trả lời câu nào bị từ chối (không tính lượt thi).
+     *
+     * - `end_reason` (finished / submitted / left) + số câu đã làm quyết định có tính lượt
+     *   không (Attempt::countable) → không đủ: 422, KHÔNG tăng lượt thi.
+     * - `client_key` (uuid / lượt): gửi lại cùng khóa (beacon + lỗi mạng) → trả lượt đã có (200).
      * Chi tiết từng câu lưu ở attempt_answers (xem AttemptRecorder).
+     * - Chống làm giả bảng xếp hạng: server tự chấm (bỏ qua điểm client gửi); phải có
+     *   `attempt_token` (vé lấy lúc mở đề) và đủ thời gian làm bài thật (AttemptToken).
      */
     public function store(Request $request, Example $example, AttemptRecorder $recorder)
     {
@@ -26,23 +32,69 @@ class AttemptController extends Controller
         }
 
         $data = $request->validate([
-            'score' => ['required', 'numeric', 'min:0', 'max:10'],
-            'earned_points' => ['nullable', 'numeric', 'min:0'],
-            'total_points' => ['nullable', 'numeric', 'min:0'],
-            'correct_count' => ['required', 'integer', 'min:0', 'max:65535'],
-            'wrong_count' => ['required', 'integer', 'min:0', 'max:65535'],
+            // Điểm / số câu client tự tính: chỉ nhận cho tương thích, server KHÔNG dùng (tự chấm lại).
+            'score' => ['nullable', 'numeric', 'min:0', 'max:10'],
+            'earned_points' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+            'total_points' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+            'correct_count' => ['nullable', 'integer', 'min:0', 'max:65535'],
+            'wrong_count' => ['nullable', 'integer', 'min:0', 'max:65535'],
             'unanswered_count' => ['nullable', 'integer', 'min:0', 'max:65535'],
+            'attempt_token' => ['nullable', 'string', 'max:1000'],
             'duration_seconds' => ['nullable', 'integer', 'min:0', 'max:86400'],
             'answers' => ['nullable', 'array', 'max:2000'],
             'answers.*.question_id' => ['nullable', 'integer'],
-            'answers.*.correct' => ['required', 'boolean'],
+            'answers.*.correct' => ['nullable', 'boolean'],
             'answers.*.response' => ['nullable'],
             'answers.*.answer_ids' => ['nullable', 'array', 'max:100'],
+            'end_reason' => ['nullable', 'string', 'in:' . implode(',', Attempt::END_REASONS)],
+            'client_key' => ['nullable', 'uuid'],
         ]);
 
-        $attempt = $recorder->record($example, auth()->id(), $data);
+        // Đã ghi lượt này rồi (gửi lại) → trả bản cũ, không cộng thêm lượt thi.
+        if (!empty($data['client_key'])) {
+            $existing = Attempt::where('user_id', auth()->id())
+                ->where('client_key', $data['client_key'])
+                ->first();
+            if ($existing) {
+                return response()->json($existing, 200);
+            }
+        }
+
+        // Phải bắt đầu từ trang làm bài (có vé) và đủ thời gian làm thật: tính từ lúc mở đề hoặc
+        // từ lượt trước của chính người này ở đề này (chặn nộp dồn nhiều lượt bằng 1 vé).
+        $startedAt = AttemptToken::startedAt($data['attempt_token'] ?? null, auth()->id(), $example->id);
+        if ($startedAt === null) {
+            return response()->json([
+                'message' => 'Lượt làm bài không hợp lệ — hãy mở lại đề và làm bài.',
+                'code' => 'invalid_attempt',
+            ], 422);
+        }
+        $lastAttempt = Attempt::where('user_id', auth()->id())->where('example_id', $example->id)->max('created_at');
+        $since = max($startedAt, $lastAttempt ? strtotime((string) $lastAttempt) : 0);
+        $elapsed = max(0, time() - $since);
+        if ($elapsed < $recorder->answeredCount($example, $data) * AttemptToken::MIN_SECONDS_PER_ANSWER) {
+            return response()->json([
+                'message' => 'Bạn nộp bài quá nhanh — lượt này không được tính.',
+                'code' => 'too_fast',
+            ], 422);
+        }
+        // Thời gian làm bài: không vượt quá thời gian server đo được.
+        $data['duration_seconds'] = min((int) ($data['duration_seconds'] ?? $elapsed), time() - $startedAt);
+
+        try {
+            $attempt = $recorder->record($example, auth()->id(), $data);
+        } catch (\Illuminate\Database\UniqueConstraintViolationException) {
+            // 2 request cùng khóa đến cùng lúc (beacon + gửi lại) → bản kia đã ghi.
+            return response()->json(
+                Attempt::where('user_id', auth()->id())->where('client_key', $data['client_key'])->first(),
+                200,
+            );
+        }
         if (!$attempt) {
-            return response()->json(['message' => 'Chưa trả lời câu nào, không ghi nhận lượt thi.'], 422);
+            return response()->json([
+                'message' => 'Lượt này chưa đủ để tính là 1 lượt thi.',
+                'code' => 'not_counted',
+            ], 422);
         }
 
         return response()->json($attempt, 201);
@@ -55,6 +107,7 @@ class AttemptController extends Controller
      */
     public function index(Example $example)
     {
+        abort_unless($example->viewableBy(auth('api')->user()), 404);
         $best = fn () => DB::table('attempts')
             ->where('example_id', $example->id)
             ->groupBy('user_id')
@@ -110,7 +163,7 @@ class AttemptController extends Controller
             ->latest()
             ->limit(5)
             ->get(['ulid', 'score', 'earned_points', 'total_points', 'correct_count', 'wrong_count',
-                'unanswered_count', 'duration_seconds', 'created_at']);
+                'unanswered_count', 'duration_seconds', 'end_reason', 'created_at']);
 
         return response()->json([
             'scores' => $scores,
@@ -170,6 +223,7 @@ class AttemptController extends Controller
             'wrong_count' => $attempt->wrong_count,
             'unanswered_count' => $attempt->unanswered_count,
             'duration_seconds' => $attempt->duration_seconds,
+            'end_reason' => $attempt->end_reason,
             'created_at' => $attempt->created_at,
             'example_name' => $attempt->example?->name ?? $attempt->example_name,
             'example' => $attempt->example?->only(['slug', 'name']),

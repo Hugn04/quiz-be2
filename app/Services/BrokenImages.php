@@ -51,11 +51,21 @@ class BrokenImages
             foreach ($chunk->diff($http) as $url) {
                 $broken[$url] = 'không phải link http(s)';
             }
+            // Chống SSRF: link trỏ vào mạng nội bộ / localhost / metadata → không tải, coi là hỏng.
+            $blocked = $http->reject(fn ($u) => \App\Support\SafeUrl::isPublicHttp($u));
+            foreach ($blocked as $url) {
+                $broken[$url] = 'địa chỉ không được phép';
+            }
+            $http = $http->diff($blocked)->values();
             $responses = $http->isEmpty() ? [] : Http::pool(fn (Pool $pool) => $http->map(
-                fn ($url) => $pool->as($url)->timeout($timeout)->withHeaders([
-                    'User-Agent' => 'Mozilla/5.0 (compatible; ImageCheck/1.0)',
-                    'Accept' => 'image/*,*/*;q=0.8',
-                ])->get($url)
+                fn ($url) => $pool->as($url)->timeout($timeout)
+                    ->withOptions(\App\Support\SafeUrl::guzzleOptions())
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (compatible; ImageCheck/1.0)',
+                        'Accept' => 'image/*,*/*;q=0.8',
+                        // Chỉ cần biết có dữ liệu ảnh, không tải cả file.
+                        'Range' => 'bytes=0-1023',
+                    ])->get($url)
             )->all());
             foreach ($http as $url) {
                 $reason = $this->reason($responses[$url] ?? null);

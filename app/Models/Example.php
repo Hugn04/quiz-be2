@@ -10,6 +10,12 @@ class Example extends Model
 {
     use HasFactory, HasSlug;
 
+    /** Trạng thái duyệt đề (cột `status`). */
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_REJECTED = 'rejected';
+    public const STATUSES = [self::STATUS_APPROVED, self::STATUS_PENDING, self::STATUS_REJECTED];
+
     /** Cột được phép dùng trong ?orderBy= */
     public const SORTABLE = ['count_test', 'count_like', 'created_at', 'updated_at', 'num_question', 'name'];
 
@@ -22,9 +28,10 @@ class Example extends Model
     protected $casts = [
         'hidden_at' => 'datetime',
         'pinned_at' => 'datetime',
+        'reviewed_at' => 'datetime',
     ];
 
-    protected $hidden = ['liked_by_me', 'favorited_by_me'];
+    protected $hidden = ['liked_by_me', 'favorited_by_me', 'my_best_score', 'my_last_done_at'];
 
     protected $fillable = [
         'name',
@@ -65,10 +72,10 @@ class Example extends Model
     }
 
     /** Đề tôi đã yêu thích. */
-    /** Chỉ đề đang công khai (chưa bị ẩn). */
+    /** Chỉ đề đang công khai: chưa bị ẩn VÀ đã được duyệt. */
     public function scopeVisible($query)
     {
-        return $query->whereNull('examples.hidden_at');
+        return $query->whereNull('examples.hidden_at')->where('examples.status', self::STATUS_APPROVED);
     }
 
     public function isHidden(): bool
@@ -76,13 +83,30 @@ class Example extends Model
         return $this->hidden_at !== null;
     }
 
+    public function isApproved(): bool
+    {
+        return ($this->status ?? self::STATUS_APPROVED) === self::STATUS_APPROVED;
+    }
+
+    /** Công khai với mọi người (không bị ẩn, đã duyệt). */
+    public function isPublic(): bool
+    {
+        return !$this->isHidden() && $this->isApproved();
+    }
+
+    /** Người duyệt đề. */
+    public function reviewer()
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
     /**
      * Người hiện tại xem được đề này không: đề công khai → ai cũng xem;
-     * đề bị ẩn → chỉ tác giả và administrator / manager.
+     * đề bị ẩn / chờ duyệt / bị từ chối → chỉ tác giả và administrator / manager.
      */
     public function viewableBy(?User $user): bool
     {
-        if (!$this->isHidden()) {
+        if ($this->isPublic()) {
             return true;
         }
 
@@ -112,18 +136,29 @@ class Example extends Model
     {
         $id = auth('api')->id();
 
-        return $query->with(['user', 'sector'])->withExists([
+        $query->with(['user', 'sector'])->withExists([
             'likers as liked_by_me' => fn ($q) => $q->where('users.id', $id),
             'favoritedBy as favorited_by_me' => fn ($q) => $q->where('users.id', $id),
         ]);
+
+        // Điểm cao nhất của tôi ở đề này (null = chưa làm) — dùng index (user_id, example_id).
+        if ($id) {
+            $query->withMax(['attempts as my_best_score' => fn ($q) => $q->where('user_id', $id)], 'score');
+        }
+
+        return $query;
     }
 
-    /** `{ like, favorited }` của người dùng hiện tại (cần scope withAll). */
+    /** `{ like, favorited, best_score }` của người dùng hiện tại (cần scope withAll). */
     public function getUserActionAttribute(): array
     {
+        $best = $this->attributes['my_best_score'] ?? null;
+
         return [
             'like' => (bool) ($this->attributes['liked_by_me'] ?? false),
             'favorited' => (bool) ($this->attributes['favorited_by_me'] ?? false),
+            // Điểm cao nhất của tôi (thang 10), null = chưa làm đề này.
+            'best_score' => $best === null ? null : round((float) $best, 2),
         ];
     }
 
@@ -146,7 +181,7 @@ class Example extends Model
     {
         return $query
             // Tìm theo tên đề hoặc tên tác giả (gom trong 1 nhóm để không phá các điều kiện khác).
-            ->when(trim((string) ($filters['search'] ?? '')) !== '', function ($q) use ($filters) {
+            ->when(is_string($filters['search'] ?? null) && trim($filters['search']) !== '', function ($q) use ($filters) {
                 // Escape % và _ để người dùng gõ ký tự này không thành wildcard.
                 $search = '%' . addcslashes(trim($filters['search']), '%_\\') . '%';
                 $q->where(function ($w) use ($search) {
@@ -155,7 +190,7 @@ class Example extends Model
                 });
             })
             // Lọc theo slug ngành (vd ?sector=cong-nghe-thong-tin)
-            ->when(!empty($filters['sector']), function ($q) use ($filters) {
+            ->when(is_string($filters['sector'] ?? null) && $filters['sector'] !== '', function ($q) use ($filters) {
                 $q->whereHas('sector', fn ($s) => $s->where('slug', $filters['sector']));
             })
             // Lọc theo số câu hỏi (?min_questions=30&max_questions=60)

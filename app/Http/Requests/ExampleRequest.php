@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\QuestionTypes\QuestionTypes;
+use App\Rules\NoProfanity;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -12,6 +13,9 @@ use Illuminate\Validation\Validator;
  */
 class ExampleRequest extends FormRequest
 {
+    /** Tổng số câu tối đa của 1 đề. */
+    public const MAX_QUESTIONS = 5000;
+
     public function authorize(): bool
     {
         $example = $this->route('example');
@@ -42,29 +46,32 @@ class ExampleRequest extends FormRequest
 
     public function rules(): array
     {
+        // Chặn từ tục ở mọi ô chữ người dùng nhập (tên đề, tên phần, câu hỏi, đáp án, giải thích).
+        $clean = new NoProfanity();
+
         return [
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['required', 'string', 'max:255', $clean],
             'credits' => ['required', 'integer', 'min:0', 'max:100'],
             'sector' => ['required', 'string', 'exists:sectors,slug'],
-            'image' => ['sometimes', 'nullable', 'string', 'max:2048'],
+            'image' => ['sometimes', 'nullable', 'string', 'max:2048', 'url:http,https'],
 
-            'question' => ['required', 'array', 'min:1'],
-            'question.*.name' => ['required', 'string', 'max:255'],
-            'question.*.questions' => ['required', 'array', 'min:1'],
-            'question.*.questions.*.name' => ['required', 'string'],
+            'question' => ['required', 'array', 'min:1', 'max:100'],
+            'question.*.name' => ['required', 'string', 'max:255', $clean],
+            'question.*.questions' => ['required', 'array', 'min:1', 'max:2000'],
+            'question.*.questions.*.name' => ['required', 'string', 'max:20000', $clean],
             'question.*.questions.*.type' => ['sometimes', 'nullable', 'string', 'in:' . implode(',', QuestionTypes::keys())],
-            'question.*.questions.*.explanation' => ['sometimes', 'nullable', 'string'],
+            'question.*.questions.*.explanation' => ['sometimes', 'nullable', 'string', 'max:20000', $clean],
             'question.*.questions.*.points' => ['sometimes', 'nullable', 'numeric', 'min:0.25', 'max:100'],
             'question.*.questions.*.settings' => ['sometimes', 'nullable', 'array'],
             'question.*.questions.*.settings.case_sensitive' => ['sometimes', 'boolean'],
-            'question.*.questions.*.img' => ['sometimes', 'nullable', 'array'],
+            'question.*.questions.*.img' => ['sometimes', 'nullable', 'array', 'max:10'],
             'question.*.questions.*.img.*.url' => ['required', 'string', 'max:2048'],
             // Số đáp án tối thiểu khác nhau theo dạng → kiểm tra trong after().
-            'question.*.questions.*.answers' => ['required', 'array', 'min:1'],
-            'question.*.questions.*.answers.*.option' => ['required', 'string'],
+            'question.*.questions.*.answers' => ['required', 'array', 'min:1', 'max:50'],
+            'question.*.questions.*.answers.*.option' => ['required', 'string', 'max:5000', $clean],
             'question.*.questions.*.answers.*.is_correct' => ['sometimes', 'boolean'],
             'question.*.questions.*.answers.*.meta' => ['sometimes', 'nullable', 'array'],
-            'question.*.questions.*.answers.*.meta.match' => ['sometimes', 'nullable', 'string'],
+            'question.*.questions.*.answers.*.meta.match' => ['sometimes', 'nullable', 'string', 'max:5000', $clean],
         ];
     }
 
@@ -74,6 +81,12 @@ class ExampleRequest extends FormRequest
         return [
             function (Validator $validator) {
                 if ($validator->errors()->isNotEmpty()) {
+                    return;
+                }
+                $total = collect($this->input('question', []))->sum(fn ($p) => is_array($p['questions'] ?? null) ? count($p['questions']) : 0);
+                if ($total > self::MAX_QUESTIONS) {
+                    $validator->errors()->add('question', 'Đề tối đa ' . self::MAX_QUESTIONS . ' câu — hãy tách thành nhiều đề.');
+
                     return;
                 }
                 foreach ($this->input('question', []) as $pi => $part) {

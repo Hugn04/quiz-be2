@@ -158,8 +158,9 @@ return [
     */
 
     'persistent_claims' => [
-        // 'foo',
-        // 'bar',
+        // Giữ khi refresh: `ver` để so token_version (thu hồi phiên), `role` cho frontend.
+        'ver',
+        'role',
     ],
 
     /*

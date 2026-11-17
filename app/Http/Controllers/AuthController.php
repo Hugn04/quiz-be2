@@ -189,8 +189,9 @@ class AuthController extends Controller
             return response()->json('Email này đã được đăng ký rồi !', 409);
         } else {
             $otp = $this->generateOTP();
-            Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
-            Cache::put('otp_' . $email . '_attempts', 0, now()->addMinutes(5));
+            $key = $this->otpKey('register', $email);
+            Cache::put($key, $otp, now()->addMinutes(5));
+            Cache::put($key . '_attempts', 0, now()->addMinutes(5));
             Mail::to($email)->send(new OTPVerify($otp));
             return response()->json("Đã gửi email tới " . $email . ". Vui lòng kiểm tra email!");
         }
@@ -207,17 +208,22 @@ class AuthController extends Controller
         $email = $data['email'];
         $otp = $data['otp'];
 
-        $dataOTP = $this->verifyOTP($email, $otp);
+        $dataOTP = $this->verifyOTP('register', $email, $otp);
         if ($dataOTP === true) {
             $password = bcrypt($data["password"]);
             $name = $data["name"];
             $user = User::where('email', $email)->first();
+            if ($user && $user->password) {
+                // Tài khoản đã có mật khẩu → không cho "đăng ký" đè (đổi mật khẩu phải qua quên mật khẩu).
+                return response()->json('Email này đã được đăng ký rồi !', 409);
+            }
             if ($user) {
-                $user->update([
+                // Tài khoản Google đặt thêm mật khẩu → thu hồi mọi phiên cũ.
+                $user->forceFill([
                     "password" => $password,
                     'email_verified_at' => now(),
-                    'updated_at' => now()
-                ]);
+                ])->save();
+                $user->increment('token_version');
             } else {
                 $user = User::create([
                     "name" => $name,
@@ -238,16 +244,15 @@ class AuthController extends Controller
     {
         $data = $request->validate(['email' => ['required', 'email', 'max:255']]);
         $email = $data['email'];
-        $account = DB::table("users")->where("email", $email)->get();
-        if ($account->count()) {
+        // Luôn trả cùng một câu (có hay không có tài khoản) → không dò được email đã đăng ký.
+        if (DB::table("users")->where("email", $email)->exists()) {
             $otp = $this->generateOTP();
-            Cache::put('otp_' . $email, $otp, now()->addMinutes(5));
-            Cache::put('otp_' . $email . '_attempts', 0, now()->addMinutes(5));
+            $key = $this->otpKey('reset', $email);
+            Cache::put($key, $otp, now()->addMinutes(5));
+            Cache::put($key . '_attempts', 0, now()->addMinutes(5));
             Mail::to($data['email'])->send(new OTPVerify($otp));
-            return response()->json("");
-        } else {
-            return response()->json('Email không tồn tại !', 404);
         }
+        return response()->json("Nếu email đã đăng ký, mã OTP đã được gửi tới " . $email . ".");
     }
     /** POST /auth/password/reset — xác nhận OTP, đặt mật khẩu ngẫu nhiên và gửi qua email. */
     public function resetPassword(Request $request)
@@ -258,9 +263,9 @@ class AuthController extends Controller
         ]);
         $email = $data['email'];
         $otp = $data['otp'];
-        $dataOTP = $this->verifyOTP($email, $otp);
+        $dataOTP = $this->verifyOTP('reset', $email, $otp);
         if ($dataOTP === true) {
-            $password = $this->generateRandomPassword(6);
+            $password = $this->generateRandomPassword(10);
             User::where('email', $email)->update([
                 'password' => bcrypt($password),
             ]);
@@ -302,9 +307,15 @@ class AuthController extends Controller
     /** Tối đa số lần nhập sai cho 1 mã OTP (chống dò 6 chữ số). */
     private const OTP_MAX_ATTEMPTS = 5;
 
-    private function verifyOTP($email, $otp)
+    /** Khoá cache OTP: tách theo mục đích (đăng ký / quên mật khẩu) — mã của việc này không dùng được cho việc kia. */
+    private function otpKey(string $purpose, string $email): string
     {
-        $key = 'otp_' . $email;
+        return 'otp_' . $purpose . '_' . mb_strtolower(trim($email));
+    }
+
+    private function verifyOTP(string $purpose, $email, $otp)
+    {
+        $key = $this->otpKey($purpose, (string) $email);
         $cachedOtp = Cache::get($key);
         if (!$cachedOtp) {
             return response()->json('OTP đã hết hạn', 410);

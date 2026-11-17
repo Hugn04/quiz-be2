@@ -28,10 +28,12 @@ return [
         'key' => env('RESEND_KEY'),
     ],
 
-    // Lấy đề từ EduQuiz (chỉ administrator, trang quản trị → Lấy đề).
-    'eduquiz' => [
-        'url' => env('EDUQUIZ_API_URL', 'https://studio-api-07.eduquiz.io.vn/quiz-chanel/public/api/v1'),
-        'token' => env('EDUQUIZ_TOKEN'),
+    // Lấy đề từ nguồn đề ngoài (chỉ administrator, trang quản trị → Lấy đề).
+    'quiz_source' => [
+        'url' => env('QUIZ_SOURCE_API_URL'),
+        'token' => env('QUIZ_SOURCE_TOKEN'),
+        // `bizapp` của "Nguồn chính" trên API nguồn.
+        'bizapp' => env('QUIZ_SOURCE_BIZAPP'),
     ],
 
     'google' => [

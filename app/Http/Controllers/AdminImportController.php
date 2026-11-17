@@ -2,26 +2,67 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\ExampleRequest;
 use App\Models\AdminLog;
 use App\Models\Example;
 use App\Models\Sector;
+use App\Rules\NoProfanity;
 use App\Services\ExampleContent;
 use App\Services\ImageLocalizer;
 use Illuminate\Support\Facades\DB;
-use App\Services\EduquizImporter;
+use App\Services\QuizSourceImporter;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use RuntimeException;
 
-/** /admin/import/* — lấy đề từ nguồn ngoài (CHỈ administrator). */
+/** /admin/import/* — lấy đề từ nguồn ngoài / file CSV (CHỈ administrator). */
 class AdminImportController extends Controller
 {
-    /** GET /admin/import/eduquiz?key=13995&source=EDUQUIZ — xem trước nội dung đề. */
-    public function eduquiz(Request $request, EduquizImporter $importer)
+    /**
+     * POST /admin/import/csv — tạo đề từ file CSV. Trình duyệt đọc file (.csv) thành
+     * nội dung đề giống trang tạo đề (`question` = các phần) → kiểm tra y hệt trang tạo đề
+     * (ExampleRequest + quy tắc từng dạng câu), tạo dưới tài khoản người đang đăng nhập.
+     * Body: { name, sector, credits, question, source_file? }.
+     */
+    public function csv(ExampleRequest $request, ExampleContent $content)
+    {
+        $data = $request->validated();
+        $file = mb_substr(trim((string) $request->input('source_file', '')), 0, 200);
+
+        $example = DB::transaction(function () use ($data, $content) {
+            $example = new Example();
+            $example->forceFill([
+                'name' => $data['name'],
+                'count_test' => 0,
+                'count_like' => 0,
+                'num_question' => 0,
+                'credits' => $data['credits'],
+                'sector_id' => Sector::where('slug', $data['sector'])->value('id'),
+                'user_id' => auth()->id(),
+            ])->save();
+            $content->sync($example, $data['question']);
+
+            return $example;
+        });
+
+        AdminLog::record('import.create', 'exam', $example->slug, $example->name, [
+            'source' => 'CSV' . ($file !== '' ? ": $file" : ''),
+            'questions' => $example->num_question,
+        ]);
+
+        return response()->json([
+            'slug' => $example->slug,
+            'name' => $example->name,
+            'questions' => $example->num_question,
+        ], 201);
+    }
+
+    /** GET /admin/import/source?key=13995&source=MAIN — xem trước nội dung đề. */
+    public function preview(Request $request, QuizSourceImporter $importer)
     {
         $data = $request->validate([
             'key' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z0-9_-]+$/'],
-            'source' => ['required', Rule::in(EduquizImporter::SOURCES)],
+            'source' => ['required', Rule::in(QuizSourceImporter::SOURCES)],
         ], ['key.regex' => 'Key chỉ gồm chữ, số, - và _.']);
 
         try {
@@ -35,23 +76,31 @@ class AdminImportController extends Controller
     }
 
     /**
-     * POST /admin/import/eduquiz — lấy lại đề từ nguồn (không tin dữ liệu client gửi), chuyển
+     * POST /admin/import/source — lấy lại đề từ nguồn (không tin dữ liệu client gửi), chuyển
      * mọi ảnh về Cloudinary rồi tạo đề dưới tài khoản người đang đăng nhập.
      * Body { key, source, name, sector (slug), credits }.
      */
-    public function store(Request $request, EduquizImporter $importer, ImageLocalizer $localizer, ExampleContent $content)
+    public function store(Request $request, QuizSourceImporter $importer, ImageLocalizer $localizer, ExampleContent $content)
     {
         $data = $request->validate([
             'key' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z0-9_-]+$/'],
-            'source' => ['required', Rule::in(EduquizImporter::SOURCES)],
-            'name' => ['nullable', 'string', 'max:255'],
+            'source' => ['required', Rule::in(QuizSourceImporter::SOURCES)],
+            // Tên đề do người nhập tự đặt (không tự sinh theo nguồn + key).
+            'name' => ['required', 'string', 'max:255', new NoProfanity()],
             'sector' => ['required', 'string', 'exists:sectors,slug'],
             'credits' => ['required', 'integer', 'min:0', 'max:100'],
             // Bỏ qua đề có nhiều ảnh hơn mức này (null = không giới hạn).
             'max_images' => ['nullable', 'integer', 'min:0', 'max:1000'],
             // Cho phép nhập lại đề đã nhập trước đó.
             'allow_duplicate' => ['sometimes', 'boolean'],
-        ], ['key.regex' => 'Key chỉ gồm chữ, số, - và _.', 'sector.exists' => 'Ngành không tồn tại.']);
+            // Bỏ các câu có ảnh (giới hạn ảnh khi đó chỉ tính trên các câu còn lại).
+            'skip_image_questions' => ['sometimes', 'boolean'],
+        ], [
+            'key.regex' => 'Key chỉ gồm chữ, số, - và _.',
+            'sector.exists' => 'Ngành không tồn tại.',
+            'name.required' => 'Chưa nhập tên đề.',
+        ]);
+        $data['name'] = trim($data['name']);
         @set_time_limit(600);
         $sourceLabel = "{$data['source']} #{$data['key']}";
 
@@ -65,7 +114,7 @@ class AdminImportController extends Controller
         }
 
         try {
-            $result = $importer->fetch($data['key'], $data['source']);
+            $result = $importer->fetch($data['key'], $data['source'], (bool) ($data['skip_image_questions'] ?? false));
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -99,7 +148,7 @@ class AdminImportController extends Controller
         $example = DB::transaction(function () use ($data, $parts, $content, $sourceLabel) {
             $example = new Example();
             $example->forceFill([
-                'name' => trim((string) ($data['name'] ?? '')) ?: $sourceLabel,
+                'name' => $data['name'],
                 'count_test' => 0,
                 'count_like' => 0,
                 'num_question' => 0,
@@ -117,12 +166,13 @@ class AdminImportController extends Controller
             'source' => $sourceLabel,
             'questions' => $result['total'],
             'images' => $stats['uploaded'] + $stats['reused'],
-        ]);
+        ] + ($result['skipped_image_questions'] ? ['skipped_image_questions' => $result['skipped_image_questions']] : []));
 
         return response()->json([
             'slug' => $example->slug,
             'name' => $example->name,
             'questions' => $result['total'],
+            'skipped_image_questions' => $result['skipped_image_questions'],
             'images' => [
                 'moved' => $stats['uploaded'] + $stats['reused'],
                 'kept' => $stats['kept_heavy'],

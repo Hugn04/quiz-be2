@@ -53,10 +53,11 @@ class SettingController extends Controller
             'announcement' => ['sometimes', 'nullable', 'array'],
             'announcement.enabled' => ['required_with:announcement', 'boolean'],
             'announcement.message' => ['required_if:announcement.enabled,true', 'nullable', 'string', 'max:300'],
-            'announcement.link' => ['nullable', 'string', 'max:255', 'regex:~^(https://|/)~'],
+            'announcement.link' => ['nullable', 'string', 'max:255', 'regex:~^(https://|/(?!/))~'],
             'announcement.tone' => ['nullable', 'in:info,success,warning,danger'],
             'announcement.starts_at' => ['nullable', 'date'],
             'announcement.ends_at' => ['nullable', 'date', 'after:announcement.starts_at'],
+            'exam_approval' => ['sometimes', 'boolean'],
         ], [
             'primary_color.regex' => 'Màu phải có dạng #rrggbb.',
             '*.url' => 'Link phải bắt đầu bằng https://',

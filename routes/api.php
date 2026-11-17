@@ -39,7 +39,7 @@ Route::prefix('auth')->group(function () {
     });
 
     // Đổi JWT (có thể đã hết hạn, còn trong hạn refresh) lấy JWT mới
-    Route::post('refresh', [AuthController::class, 'refresh']);
+    Route::post('refresh', [AuthController::class, 'refresh'])->middleware('throttle:60,1');
 });
 
 Route::get('examples', [ExampleController::class, 'index']);
@@ -69,6 +69,7 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
         Route::patch('/', [UserController::class, 'updateMe']);
         Route::get('examples', [ExampleController::class, 'mine']);
         Route::get('favorites', [ExampleController::class, 'favorites']);
+        Route::get('done-examples', [ExampleController::class, 'done']);
         Route::get('attempts', [AttemptController::class, 'mine']);
         // Ping giữ trạng thái online khi đang mở web (middleware token.version ghi last_seen_at).
         Route::post('heartbeat', fn () => response()->noContent())->middleware('throttle:10,1');
@@ -78,19 +79,19 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
     Route::get('users/{user:uuid}', [UserController::class, 'show'])->whereUuid('user');
 
     // Đề thi
-    Route::post('examples', [ExampleController::class, 'store']);
+    Route::post('examples', [ExampleController::class, 'store'])->middleware('throttle:30,1');
     Route::get('examples/{example:slug}', [ExampleController::class, 'show']);
-    Route::put('examples/{example:slug}', [ExampleController::class, 'update']);
+    Route::put('examples/{example:slug}', [ExampleController::class, 'update'])->middleware('throttle:30,1');
     Route::delete('examples/{example:slug}', [ExampleController::class, 'destroy']);
     Route::put('examples/{example:slug}/like', [ExampleController::class, 'like']);
     Route::put('examples/{example:slug}/favorite', [ExampleController::class, 'favorite']);
     Route::post('examples/{example:slug}/reports', [\App\Http\Controllers\QuestionReportController::class, 'store'])->middleware('throttle:reports');
 
     // Lượt làm bài + bảng xếp hạng của 1 đề
-    Route::post('examples/{example:slug}/attempts', [AttemptController::class, 'store']);
+    Route::post('examples/{example:slug}/attempts', [AttemptController::class, 'store'])->middleware('throttle:attempts');
     Route::get('attempts/{attempt:ulid}', [AttemptController::class, 'show']);
 
-    // Nhập đề từ EduQuiz (admin)
+    // Nhập đề từ nguồn ngoài (admin)
 
     // ----- Trang quản trị -----
     // administrator + manager: tổng quan, quản lý mọi đề thi.
@@ -98,11 +99,13 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
         Route::get('stats', [AdminController::class, 'stats']);
         Route::get('online', [AdminController::class, 'online']);
         Route::get('examples', [AdminController::class, 'examples']);
+        Route::get('examples/review-count', [AdminController::class, 'reviewCount']);
         Route::get('examples/{example:slug}', [AdminController::class, 'showExample']);
         Route::put('examples/{example:slug}', [AdminController::class, 'updateExample']);
         Route::delete('examples/{example:slug}', [AdminController::class, 'destroyExample']);
         Route::patch('examples/{example:slug}/visibility', [AdminController::class, 'updateVisibility']);
         Route::patch('examples/{example:slug}/pin', [AdminController::class, 'updatePin']);
+        Route::patch('examples/{example:slug}/review', [AdminController::class, 'review']);
         Route::get('reports', [\App\Http\Controllers\QuestionReportController::class, 'index']);
         Route::get('reports/count', [\App\Http\Controllers\QuestionReportController::class, 'openCount']);
         Route::patch('reports/{report}', [\App\Http\Controllers\QuestionReportController::class, 'update'])->whereNumber('report');
@@ -122,8 +125,9 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
         Route::middleware('checkRole:administrator')->group(function () {
             Route::put('settings', [SettingController::class, 'update']);
             Route::get('logs', [AdminController::class, 'logs']);
-            Route::get('import/eduquiz', [\App\Http\Controllers\AdminImportController::class, 'eduquiz'])->middleware('throttle:30,1');
-            Route::post('import/eduquiz', [\App\Http\Controllers\AdminImportController::class, 'store'])->middleware('throttle:30,1');
+            Route::get('import/source', [\App\Http\Controllers\AdminImportController::class, 'preview'])->middleware('throttle:30,1');
+            Route::post('import/source', [\App\Http\Controllers\AdminImportController::class, 'store'])->middleware('throttle:30,1');
+            Route::post('import/csv', [\App\Http\Controllers\AdminImportController::class, 'csv'])->middleware('throttle:30,1');
             Route::post('tools/images/scan', [\App\Http\Controllers\AdminToolController::class, 'scanImages']);
             Route::post('tools/images/prune', [\App\Http\Controllers\AdminToolController::class, 'pruneImages']);
             Route::get('tools/export/users', [\App\Http\Controllers\AdminToolController::class, 'exportUsers']);
@@ -132,5 +136,5 @@ Route::middleware(['auth:api', 'token.version'])->group(function () {
     });
 
     // Upload ảnh lên Cloudinary
-    Route::post('images', [ImageController::class, 'store']);
+    Route::post('images', [ImageController::class, 'store'])->middleware('throttle:30,1');
 });

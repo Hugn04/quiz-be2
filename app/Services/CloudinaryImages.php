@@ -14,7 +14,9 @@ use Throwable;
  * public id để xóa). An toàn:
  *  - chỉ xóa ảnh thuộc cloud + thư mục của app (avatar Google, link ngoài → bỏ qua);
  *  - chỉ xóa sau khi transaction commit (lưu thất bại thì ảnh cũ còn nguyên);
- *  - bỏ qua nếu URL vẫn còn được bản ghi khác dùng;
+ *  - bỏ qua nếu ẢNH (theo public id, không theo nguyên chuỗi URL) vẫn còn được bản ghi khác
+ *    dùng — chặn chiêu gắn link ảnh người khác kèm "?x" / transformation vào đề của mình
+ *    rồi xoá đề để xoá luôn ảnh của họ;
  *  - lỗi Cloudinary chỉ ghi log, không làm hỏng request.
  */
 class CloudinaryImages
@@ -53,8 +55,8 @@ class CloudinaryImages
             return;
         }
 
-        DB::afterCommit(function () use ($url, $publicId) {
-            if ($this->stillUsed($url)) {
+        DB::afterCommit(function () use ($publicId) {
+            if ($this->stillUsed($publicId)) {
                 return;
             }
             try {
@@ -88,20 +90,17 @@ class CloudinaryImages
         return $host ?: null;
     }
 
-    private function stillUsed(string $url): bool
+    /**
+     * Ảnh (public id) còn được dùng ở đâu không: cột ảnh, cấu hình giao diện, <img> trong nội dung.
+     * So theo public id → mọi biến thể URL (?query, transformation, http/https, hoa thường) của
+     * cùng một ảnh đều được tính. Khớp rộng (vd "abc" khớp cả "abcd") chỉ làm GIỮ LẠI ảnh thừa,
+     * không bao giờ xoá nhầm.
+     */
+    private function stillUsed(string $publicId): bool
     {
-        // Logo / ảnh mặc định trong cấu hình giao diện (JSON).
-        if (DB::table('settings')->where('value', 'like', '%' . addcslashes(json_encode($url, JSON_UNESCAPED_SLASHES), '%_') . '%')->exists()) {
-            return true;
-        }
-        foreach (self::REFERENCES as [$table, $column]) {
-            if (DB::table($table)->where($column, $url)->exists()) {
-                return true;
-            }
-        }
-        // Ảnh nhúng <img> trong nội dung câu hỏi / giải thích / đáp án (images:localize, lấy đề).
-        $like = '%' . addcslashes($url, '%_\\') . '%';
-        foreach ([['questions', 'content'], ['questions', 'explanation'], ['answers', 'content']] as [$table, $column]) {
+        $like = '%' . addcslashes($publicId, '%_\\') . '%';
+        $columns = [...self::REFERENCES, ['settings', 'value'], ['questions', 'content'], ['questions', 'explanation'], ['answers', 'content']];
+        foreach ($columns as [$table, $column]) {
             if (DB::table($table)->where($column, 'like', $like)->exists()) {
                 return true;
             }

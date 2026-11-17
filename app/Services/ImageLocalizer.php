@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Chuyển ảnh ở trang ngoài (S3 PESTHUBT, EduQuiz, ảnh base64...) về Cloudinary của app.
+ * Chuyển ảnh ở trang ngoài (S3 PESTHUBT, nguồn đề ngoài, ảnh base64...) về Cloudinary của app.
  *
  *  - Mỗi link nguồn → 1 public id cố định (sha1 của link) trong `<folder>/imported`:
  *    chạy lại không upload trùng, nhiều câu dùng chung 1 ảnh chỉ tốn 1 lần.
@@ -149,8 +149,12 @@ class ImageLocalizer
     /** Dung lượng ảnh (byte); false = ảnh chết / không phải ảnh. */
     private function probe(string $url): int|false
     {
+        // Chống SSRF: không tải link trỏ vào mạng nội bộ / localhost / metadata.
+        if (!\App\Support\SafeUrl::isPublicHttp($url)) {
+            return false;
+        }
         try {
-            $res = Http::timeout(20)->withHeaders([
+            $res = Http::timeout(20)->withOptions(\App\Support\SafeUrl::guzzleOptions())->withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (compatible; ImageImport/1.0)',
                 'Range' => 'bytes=0-0',
             ])->get($url);

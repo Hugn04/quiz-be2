@@ -14,7 +14,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Regex lọc từ tục dựng 1 lần / request (đề lớn có hàng nghìn ô cần kiểm tra).
+        $this->app->singleton(\App\Services\ProfanityFilter::class);
     }
 
     /**
@@ -36,6 +37,9 @@ class AppServiceProvider extends ServiceProvider
         ]);
 
         // Gửi OTP qua email: 3 lần / 10 phút / email (chống spam mail).
+        // Nộp lượt thi: 20 lần / phút / người (chặn spam tăng lượt thi; người thật không chạm tới).
+        RateLimiter::for('attempts', fn (Request $request) => Limit::perMinute(20)->by('attempts:' . (auth('api')->id() ?: $request->ip())));
+
         // Báo lỗi câu hỏi: tối đa 10 lần / 10 phút mỗi người.
         RateLimiter::for('reports', fn (Request $request) => Limit::perMinutes(10, 10)->by('reports:' . (auth('api')->id() ?: $request->ip())));
 

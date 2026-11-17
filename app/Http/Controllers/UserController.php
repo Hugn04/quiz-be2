@@ -15,10 +15,23 @@ class UserController extends Controller
         return response()->json($this->profile(auth()->user()));
     }
 
-    /** GET /users/{uuid} — trang cá nhân của 1 người dùng (kèm 4 đề gần nhất). */
+    /**
+     * GET /users/{uuid} — trang cá nhân của 1 người dùng (kèm 4 đề gần nhất).
+     * Xem người khác: chỉ thông tin công khai (KHÔNG email, id, trạng thái khóa...) và chỉ đề
+     * đang công khai. Chính mình / administrator / manager: đầy đủ.
+     */
     public function show(User $user)
     {
-        return response()->json($this->profile($user));
+        $viewer = auth()->user();
+        if ($viewer && ($viewer->id === $user->id || $viewer->isStaff())) {
+            return response()->json($this->profile($user));
+        }
+        abort_if($user->isBanned(), 404);
+
+        return response()->json([
+            ...$user->only(['uuid', 'name', 'avatar', 'banner', 'role', 'created_at']),
+            'examples' => $user->examples()->visible()->withAll()->latest()->limit(4)->get(),
+        ]);
     }
 
     /**
@@ -46,8 +59,8 @@ class UserController extends Controller
     {
         $data = $request->validate([
             'name' => 'sometimes|string|max:255',
-            'avatar' => 'sometimes|nullable|string|max:2048',
-            'banner' => 'sometimes|nullable|string|max:2048',
+            'avatar' => 'sometimes|nullable|string|max:2048|url:http,https',
+            'banner' => 'sometimes|nullable|string|max:2048|url:http,https',
         ]);
 
         $user = auth()->user();
@@ -72,7 +85,9 @@ class UserController extends Controller
             return response()->json(['message' => 'Thiếu tham số ids'], 422);
         }
 
-        $users = User::whereIn('id', $ids)->select('id', 'name', 'avatar')->get();
+        // Tối đa 100 id / lần (chống quét hàng loạt), bỏ id không phải số.
+        $ids = array_slice(array_values(array_filter($ids, 'is_numeric')), 0, 100);
+        $users = User::whereIn('id', $ids)->whereNull('banned_at')->select('id', 'name', 'avatar')->get();
 
         return response()->json($users);
     }

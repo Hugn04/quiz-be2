@@ -15,7 +15,11 @@ class ImageController extends Controller
     public function store(Request $request, CloudinaryImages $images)
     {
         $request->validate([
-            'image' => ['required', 'image', 'max:10240'],
+            // Không nhận SVG (có thể chứa script) — chỉ ảnh bitmap thông dụng.
+            'image' => ['required', 'file', 'mimes:jpg,jpeg,png,gif,webp', 'mimetypes:image/jpeg,image/png,image/gif,image/webp', 'max:10240'],
+        ], [
+            'image.mimes' => 'Chỉ nhận ảnh JPG, PNG, GIF hoặc WEBP.',
+            'image.mimetypes' => 'Chỉ nhận ảnh JPG, PNG, GIF hoặc WEBP.',
         ]);
 
         return response()->json(['url' => $images->upload($request->file('image'))], 201);

@@ -71,14 +71,16 @@ class AdminController extends Controller
     {
         $request->validate([
             'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
-            'state' => ['nullable', Rule::in(['visible', 'hidden', 'pinned'])],
+            'state' => ['nullable', Rule::in(['visible', 'hidden', 'pinned', 'pending', 'rejected'])],
         ]);
 
         $examples = Example::filter($request->all())
             ->when($request->query('state') === 'visible', fn ($q) => $q->visible())
             ->when($request->query('state') === 'hidden', fn ($q) => $q->whereNotNull('hidden_at'))
             ->when($request->query('state') === 'pinned', fn ($q) => $q->whereNotNull('pinned_at'))
-            ->with(['user', 'sector'])
+            ->when($request->query('state') === 'pending', fn ($q) => $q->where('status', Example::STATUS_PENDING))
+            ->when($request->query('state') === 'rejected', fn ($q) => $q->where('status', Example::STATUS_REJECTED))
+            ->with(['user', 'sector', 'reviewer:id,name'])
             ->paginate((int) $request->query('per_page', 20));
 
         return response()->json($examples);
@@ -143,8 +145,8 @@ class AdminController extends Controller
     public function updatePin(Request $request, Example $example)
     {
         $data = $request->validate(['pinned' => ['required', 'boolean']]);
-        if ($data['pinned'] && $example->isHidden()) {
-            return response()->json(['message' => 'Không thể ghim đề đang bị ẩn.'], 422);
+        if ($data['pinned'] && !$example->isPublic()) {
+            return response()->json(['message' => 'Chỉ ghim được đề đang công khai (không bị ẩn, đã duyệt).'], 422);
         }
         $wasPinned = $example->pinned_at !== null;
         $example->forceFill(['pinned_at' => $data['pinned'] ? ($example->pinned_at ?? now()) : null])->saveQuietly();
@@ -154,6 +156,43 @@ class AdminController extends Controller
         }
 
         return response()->json($example->only(['slug', 'hidden_at', 'hidden_reason', 'pinned_at']));
+    }
+
+    /** GET /admin/examples/review-count — số đề đang chờ duyệt (badge menu quản trị). */
+    public function reviewCount()
+    {
+        return response()->json([
+            'pending' => Example::where('status', Example::STATUS_PENDING)->count(),
+            'enabled' => app(\App\Services\SiteSettings::class)->examApprovalRequired(),
+        ]);
+    }
+
+    /**
+     * PATCH /admin/examples/{example}/review — duyệt / từ chối đề.
+     * Body { action: approve | reject, note?: string } (từ chối nên ghi lý do cho tác giả).
+     */
+    public function review(Request $request, Example $example)
+    {
+        $data = $request->validate([
+            'action' => ['required', Rule::in(['approve', 'reject'])],
+            'note' => ['nullable', 'string', 'max:255'],
+        ]);
+        $status = $data['action'] === 'approve' ? Example::STATUS_APPROVED : Example::STATUS_REJECTED;
+        $note = trim((string) ($data['note'] ?? '')) ?: null;
+
+        $example->forceFill([
+            'status' => $status,
+            'reviewed_by' => auth()->id(),
+            'reviewed_at' => now(),
+            'review_note' => $note,
+            // Đề bị từ chối thì không còn ghim.
+            'pinned_at' => $status === Example::STATUS_APPROVED ? $example->pinned_at : null,
+        ])->saveQuietly();
+
+        AdminLog::record($status === Example::STATUS_APPROVED ? 'exam.approve' : 'exam.reject', 'exam', $example->slug, $example->name,
+            array_filter(['author' => $example->user?->name, 'reason' => $note]));
+
+        return response()->json($example->only(['slug', 'status', 'reviewed_at', 'review_note', 'hidden_at', 'pinned_at']));
     }
 
     /** GET /admin/online — người đang online (hoạt động trong 5 phút), mới nhất trước. */

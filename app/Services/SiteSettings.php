@@ -27,6 +27,8 @@ class SiteSettings
         'site_name', 'site_description', 'contact_email', 'facebook_url', 'youtube_url', 'tiktok_url',
         // Thanh thông báo: { enabled, message, link, tone, starts_at, ends_at } | null.
         'announcement',
+        // Duyệt đề trước khi đăng (true = đề người dùng thường tạo / sửa phải chờ duyệt).
+        'exam_approval',
     ];
 
     /** Trường là ảnh (thay ảnh → xóa ảnh cũ trên Cloudinary). */
@@ -34,6 +36,12 @@ class SiteSettings
 
     public function __construct(private CloudinaryImages $images)
     {
+    }
+
+    /** Đang bật "Duyệt đề trước khi đăng"? */
+    public function examApprovalRequired(): bool
+    {
+        return (bool) ($this->appearance()['exam_approval'] ?? false);
     }
 
     /** Cấu hình hiện tại, đủ mọi trường (thiếu = null). */

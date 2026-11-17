@@ -68,12 +68,16 @@ class HomeController extends Controller
     {
         return response()->json([
             'examples' => Example::visible()->count(),
-            'questions' => DB::table('questions')->count(),
+            'questions' => DB::table('questions')
+                ->join('parts', 'parts.id', '=', 'questions.part_id')
+                ->whereIn('parts.example_id', Example::visible()->select('id'))
+                ->count(),
             'attempts' => Attempt::count(),
             'users' => DB::table('users')->count(),
             'month_attempts' => Attempt::where('created_at', '>=', now()->startOfMonth())->count(),
             'sectors' => Sector::query()
-                ->leftJoin('examples', 'examples.sector_id', '=', 'sectors.id')
+                ->leftJoin('examples', fn ($j) => $j->on('examples.sector_id', '=', 'sectors.id')
+                    ->whereNull('examples.hidden_at')->where('examples.status', Example::STATUS_APPROVED))
                 ->groupBy('sectors.id', 'sectors.slug', 'sectors.name')
                 ->orderByDesc(DB::raw('COUNT(examples.id)'))
                 ->orderBy('sectors.id')
