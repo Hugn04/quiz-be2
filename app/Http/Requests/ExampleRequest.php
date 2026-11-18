@@ -47,20 +47,21 @@ class ExampleRequest extends FormRequest
     public function rules(): array
     {
         // Chặn từ tục ở mọi ô chữ người dùng nhập (tên đề, tên phần, câu hỏi, đáp án, giải thích).
-        $clean = new NoProfanity();
+        // Administrator / manager tạo, sửa đề → không kiểm tra.
+        $clean = $this->user()?->isStaff() ? [] : [new NoProfanity()];
 
         return [
-            'name' => ['required', 'string', 'max:255', $clean],
+            'name' => ['required', 'string', 'max:255', ...$clean],
             'credits' => ['required', 'integer', 'min:0', 'max:100'],
             'sector' => ['required', 'string', 'exists:sectors,slug'],
             'image' => ['sometimes', 'nullable', 'string', 'max:2048', 'url:http,https'],
 
             'question' => ['required', 'array', 'min:1', 'max:100'],
-            'question.*.name' => ['required', 'string', 'max:255', $clean],
+            'question.*.name' => ['required', 'string', 'max:255', ...$clean],
             'question.*.questions' => ['required', 'array', 'min:1', 'max:2000'],
-            'question.*.questions.*.name' => ['required', 'string', 'max:20000', $clean],
+            'question.*.questions.*.name' => ['required', 'string', 'max:20000', ...$clean],
             'question.*.questions.*.type' => ['sometimes', 'nullable', 'string', 'in:' . implode(',', QuestionTypes::keys())],
-            'question.*.questions.*.explanation' => ['sometimes', 'nullable', 'string', 'max:20000', $clean],
+            'question.*.questions.*.explanation' => ['sometimes', 'nullable', 'string', 'max:20000', ...$clean],
             'question.*.questions.*.points' => ['sometimes', 'nullable', 'numeric', 'min:0.25', 'max:100'],
             'question.*.questions.*.settings' => ['sometimes', 'nullable', 'array'],
             'question.*.questions.*.settings.case_sensitive' => ['sometimes', 'boolean'],
@@ -68,10 +69,10 @@ class ExampleRequest extends FormRequest
             'question.*.questions.*.img.*.url' => ['required', 'string', 'max:2048'],
             // Số đáp án tối thiểu khác nhau theo dạng → kiểm tra trong after().
             'question.*.questions.*.answers' => ['required', 'array', 'min:1', 'max:50'],
-            'question.*.questions.*.answers.*.option' => ['required', 'string', 'max:5000', $clean],
+            'question.*.questions.*.answers.*.option' => ['required', 'string', 'max:5000', ...$clean],
             'question.*.questions.*.answers.*.is_correct' => ['sometimes', 'boolean'],
             'question.*.questions.*.answers.*.meta' => ['sometimes', 'nullable', 'array'],
-            'question.*.questions.*.answers.*.meta.match' => ['sometimes', 'nullable', 'string', 'max:5000', $clean],
+            'question.*.questions.*.answers.*.meta.match' => ['sometimes', 'nullable', 'string', 'max:5000', ...$clean],
         ];
     }
 

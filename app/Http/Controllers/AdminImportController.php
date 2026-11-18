@@ -6,7 +6,6 @@ use App\Http\Requests\ExampleRequest;
 use App\Models\AdminLog;
 use App\Models\Example;
 use App\Models\Sector;
-use App\Rules\NoProfanity;
 use App\Services\ExampleContent;
 use App\Services\ImageLocalizer;
 use Illuminate\Support\Facades\DB;
@@ -86,7 +85,7 @@ class AdminImportController extends Controller
             'key' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z0-9_-]+$/'],
             'source' => ['required', Rule::in(QuizSourceImporter::SOURCES)],
             // Tên đề do người nhập tự đặt (không tự sinh theo nguồn + key).
-            'name' => ['required', 'string', 'max:255', new NoProfanity()],
+            'name' => ['required', 'string', 'max:255'],
             'sector' => ['required', 'string', 'exists:sectors,slug'],
             'credits' => ['required', 'integer', 'min:0', 'max:100'],
             // Bỏ qua đề có nhiều ảnh hơn mức này (null = không giới hạn).
